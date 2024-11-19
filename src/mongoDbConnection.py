@@ -4,13 +4,15 @@ import os
 from datetime import datetime
 from config.config import global_config
 
+config = global_config
+
 class mongoDbConnection():
     def __init__(self, conn_string, collection_name):
         try:
             self.client = pymongo.MongoClient(conn_string, 
                                         tls=True, 
                                         tlsAllowInvalidCertificates=False, 
-                                        tlsCAFile="IntelSHA256RootCA-base64.crt")
+                                        tlsCAFile=config["ssl"]["ca"]) 
             self.collection_name = collection_name
             print("*****************************************")
             print("Connected to DB")
@@ -35,7 +37,6 @@ class mongoDbConnection():
         except Exception as e:
             raise Exception("MongoDB:addDetails:"+str(e))
 
-#mongoDbConnection(global_config['wiki_docs_db_url'])
 
 # class MongoDbConnection():
 #     def __init__(self,logger,conn_details):

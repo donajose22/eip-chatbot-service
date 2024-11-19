@@ -8,15 +8,12 @@ from src.apigee import get_access_token
 from config.config import global_config
 from src.mongoDbConnection import mongoDbConnection
 
-
-inference= Blueprint('inference', __name__)
+# inference= Blueprint('inference', __name__)
+config = global_config
 
 def generate_model(conversation_history, prompt):
-    config = global_config
-    client_id=config["apigee"]["client_id"]
-    client_secret=config["apigee"]["client_secret"]
-    client_id = "d36a38f9-f7ff-4052-9660-9d1dd493c297"
-    client_secret = "G6c8Q~110PnYPcEK24RCCdapuGjtdnnBr6bj-aHr"
+    client_id = config["genai_client_id"]
+    client_secret = config["genai_secret"]
 
     llm = LangChainCustom(client_id=client_id,
                             client_secret=client_secret,
@@ -28,14 +25,6 @@ def generate_model(conversation_history, prompt):
                             # system_prompt='Summarize everything in 100 words.')
     return llm
     
-
-
-conversation = [
-    {
-    "content": "Summarize everything in 100 words.",
-    "role": "system"
-  }
-]
 
 def retrieve_documents(prompt):
     config = global_config
@@ -51,8 +40,8 @@ def retrieve_documents(prompt):
     "metadata": {
         "top_k": 3,
         "sources": [
-        "de7170a9-f3b4-442d-98ff-b9490058f48d",
-        "ebaa280a-0a23-45c7-a09d-ceb2becc620b"
+        "'''+config["eipteam_contract_id"]+'''",
+        "'''+config["rdse_contract_id"]+'''"
         ],
         "user_email": "dona.jose@intel.com"
     }
@@ -64,7 +53,6 @@ def retrieve_documents(prompt):
                                  data=body,
                                  proxies=proxies)
         response.raise_for_status()
-        # print(response.text)
     except requests.exceptions.RequestException as e:
         print(f"Failed to retrieve wiki docs: {e}")
         raise
@@ -73,7 +61,10 @@ def retrieve_documents(prompt):
 
 def create_prompt(query_text, documents):
 
-    prompt = '''Using the information from the provided relevant documents, please answer the following query. Make sure to reference the sources in your response. Provide the links when citing the sources. If you don't know the answer, just say that you don't know, don't try to make up an answer. 
+    prompt = '''Using the information from the provided relevant documents, please answer the following query. 
+    Make sure to reference the sources in your response. Provide the links when citing the sources. 
+    If you think the provided documents are not relevant to the query, refer to the conversation history to answer the query.
+    If you don't know the answer, just say that you don't know, don't try to make up an answer. 
     
     Query : '''+query_text+'''
 
@@ -87,20 +78,19 @@ def create_prompt(query_text, documents):
 
     \nDocument : '''+documents[2]['Result:']+''' 
     \nSource : ''' + documents[2]['Source'] +'''
+
     '''
     return prompt
 
 def format_json(text):
     text = text[2:-1]
     text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-    print(text)
     json_data = json.loads(text, strict=False)
     return json_data
 
 def update_db(query_text, prompt, response, feedback):
-    config = global_config
-    connection_string = config["dms_chat_db_url"]
-    collection_name = config["dms_chat_collection_name"]
+    connection_string = config["chat_db_url"]
+    collection_name = config["chat_collection_name"]
     mongoClient = mongoDbConnection(connection_string, collection_name)
     record = {
         "user_wwid": "",
@@ -112,13 +102,9 @@ def update_db(query_text, prompt, response, feedback):
         "time": datetime.datetime.now()
     }
     resp = mongoClient.addDetails(record)
-    print(resp)
 
-@inference.route("/inference/<query_text>",methods=["GET"])
-def generate_response(query_text):
-
-    global conversation
-    #print("Previous conversation: ", conversation)
+# @inference.route("/inference/<query_text>",methods=["GET"])
+def generate_response(query_text, conversation=[]):
 
     # retrieve relevant wiki documents
     documents = retrieve_documents(query_text)
@@ -126,25 +112,18 @@ def generate_response(query_text):
     # create prompt
     prompt = create_prompt(query_text, documents['top_k_results']['response'])
 
-    # print(prompt)
-
     llm = generate_model(conversation_history=conversation, prompt=prompt)
 
     response = llm.invoke(prompt)
-    print(response)
-    # print(type(response))
-    # return response
 
     # convert response to json format
     json_data = format_json(response)
-    # json_data = response
 
     # update conversation history
     conversation = json_data["conversation"]
 
-    update_db(query_text, prompt, json_data['currentResponse'], "" )
+    # update_db(query_text, prompt, json_data['currentResponse'], "" )
 
-    # return the response
-    print(json_data['currentResponse'])
-    return jsonify(json_data["currentResponse"])
+    return [prompt, json_data['currentResponse']]
+
 

@@ -11,10 +11,12 @@ def hello_world():
     return "hello world"
 
 #--------------------------
-from routes.inference import inference
+# from inference import inference
+from routes.generate import igenerate
 #from embedding import embedding
 #--------------------------
-app.register_blueprint(inference, url_prefix='/')
+# app.register_blueprint(inference, url_prefix='/')
+app.register_blueprint(igenerate, url_prefix='/')
 #app.register_blueprint(embedding, url_prefix='/')
 #--------------------------
 
