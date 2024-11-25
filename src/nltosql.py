@@ -278,7 +278,7 @@ Example 5 - 14017507755,
     Your output should not contain any extra text outside the JSON string to avoid errors during parsing.
 """
 
-def create_prompt(question, sql_query_results):
+def create_prompt(question, sql_query, sql_query_results):
     response_prompt = f"""
     You are an agent designed to interact with a SQL query results.
     Given an input question, and the sql database query results for that question, generate a summary of the query results to answer the question.
@@ -287,9 +287,12 @@ def create_prompt(question, sql_query_results):
 
     If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. Provide the status details of the ticket.
     When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide all the details of the FlowSteps of the most recent revision and pass.
-    Important details include: unique supplier recipient pair, dms id, alt id, rev, pass, status, eta, updatedAt
+    Important details include: unique supplier recipient pair, dms id, alt id, rev, pass, status, eta, updatedAt.
+    Find the details from the SQL Query Results by looking at the SQL Query.
 
     Input Question: {question}
+
+    SQL Query: {sql_query}
 
     SQL Query Results: {sql_query_results}
 
@@ -474,6 +477,7 @@ def generate_model_response(question,prompt):
     response = format_json(response)
     return response
 
+i=0
 
 def generate_response(question):
     print("QUESTION: ", question)
@@ -504,7 +508,7 @@ def generate_response(question):
     print("=======================================================================================================")
 
     # Create prompt to summarize sql query results
-    prompt = create_prompt(question, query_results)  
+    prompt = create_prompt(question, query, query_results)  
     response = generate_model_response(question, prompt)   # use llm model to summarize sql query response
     print("GENERATED RESPONSE: \n", response["currentResponse"])
     
@@ -512,11 +516,29 @@ def generate_response(question):
 
     # convert the text to html format
     formatted_generated_response = formater.format(question, response["currentResponse"])
+    
+    global i
+    i=i+1
     if(query_type=="status" and ticket_details is not None):
-        resp = ticket_details+"<b>Summary</b><br>"+formatted_generated_response
+        resp = ticket_details+f"<b>Summary</b><br> "+formatted_generated_response
+        
+        query_format = """            
+            <button type="button" class="query-collapsible" id="{1}" onClick="expandCollapseContent()">SQL Query</button>
+            <div className='sql-query-content' id="{1}" style= "display:none" >{0}</div>
+        """
+
+        # query_format = """            
+        #     <button type="button" class="query-collapsible" id="{1}">SQL Query <div class='plusminus'>+</div></button>
+        #     <div class='sql-query-content' id="{1}" style= "display:none" >{0}</div>
+        # """
+
+        # resp += query_format.format(query, i)
+
     else:
         resp = formatted_generated_response
+    
+    
 
-    # print("______________________________________NL TO SQL RESPONSE_____________________________________")
-    # print(resp)
+    print("______________________________________NL TO SQL RESPONSE_____________________________________")
+    print(resp)
     return [prompt, query, resp]

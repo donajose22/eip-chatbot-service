@@ -83,7 +83,7 @@ def get_ticket_details(ticket_id):
 
         response += f"""
         <li>
-        <b>Supplier: {supplier}, Recipient: {recipient}</b> <br/>
+        <b>Supplier: </b>{supplier}, <b>Recipient: </b>{recipient} <br/>
         - <b>Revision:</b> {rev} 
         <b>Pass:</b> {pas} <br/>
         - <b>Status:</b> {status} <br/>
@@ -113,8 +113,15 @@ def get_ticket_details(ticket_id):
             status = flowstep[9]
             updated_at = flowstep[10]
             eta = flowstep[11]
+
+            color = "#ddd"
+            if(status=="completed"): 
+                color = "#bcecb9"
+            elif(status=="process"):
+                color = "#fafeb3"
+
             response += f"""
-            <tr>
+            <tr style='background-color:{color}'>
                 <td>{step}</td>
                 <td>{description}</td>
                 <td>{status}</td>

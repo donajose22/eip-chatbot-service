@@ -111,6 +111,13 @@ def update_db(query_text, prompt, response, sql_query=None, feedback=None):
 @igenerate.route("/generate/<query_text>",methods=["GET"])
 def generate(query_text):
 
+    # json_response = {
+    #     "response": "current_response",
+    #     "sql_query": "1"
+    # }
+
+    # return jsonify(json_response)
+
     global conversation
     sql_query = None
 
@@ -133,23 +140,24 @@ def generate(query_text):
     try:
         # convert response to json format
         json_data = format_json(choice)
-        curr_resp = json_data['currentResponse']
+        is_sql_query = json_data['currentResponse']
     except Exception as e:
-        curr_resp = "0"
+        is_sql_query = "0"
 
     try:
-        if(curr_resp == "0"):
+        if(is_sql_query == "0"):
             print("***********************INFERENCE*************************************************")
             response_prompt, response = inference.generate_response(query_text, conversation)
             # Formatting response to html format
             current_response = formater.format(query_text, response)
 
-        elif(curr_resp == "1"):
+        elif(is_sql_query == "1"):
             print("***********************NL TO SQL*************************************************")
+            is_sql_query = 1
             response_prompt, sql_query, response = nltosql.generate_response(query_text)
             current_response = response
     except Exception as e:
-        raise Exception("Incorrect response from llm model: "+curr_resp)
+        raise Exception("Incorrect response from llm model: "+is_sql_query)
         
 
     # update conversation history
@@ -171,4 +179,10 @@ def generate(query_text):
 
     # print(jsonify(current_response))
 
-    return jsonify(current_response)
+    json_response = {
+        "response": current_response,
+        "is_sql_query": is_sql_query,
+        "sql_query": sql_query
+    }
+
+    return jsonify(json_response)
