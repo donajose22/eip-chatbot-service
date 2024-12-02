@@ -111,13 +111,6 @@ def update_db(query_text, prompt, response, sql_query=None, feedback=None):
 @igenerate.route("/generate/<query_text>",methods=["GET"])
 def generate(query_text):
 
-    # json_response = {
-    #     "response": "current_response",
-    #     "sql_query": "1"
-    # }
-
-    # return jsonify(json_response)
-
     global conversation
     sql_query = None
 

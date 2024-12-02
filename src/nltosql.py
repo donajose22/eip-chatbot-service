@@ -285,7 +285,7 @@ def create_prompt(question, sql_query, sql_query_results):
     You have been provided with the database tables and schema details for your reference.
     Do not mention about the provided sql query results in the response.
 
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. Provide the status details of the ticket.
+    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id always has 5 digits while the dms id has 11 digits. Provide the status details of the ticket.
     When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide all the details of the FlowSteps of the most recent revision and pass.
     Important details include: unique supplier recipient pair, dms id, alt id, rev, pass, status, eta, updatedAt.
     Find the details from the SQL Query Results by looking at the SQL Query.

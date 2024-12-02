@@ -114,14 +114,36 @@ def get_ticket_details(ticket_id):
             updated_at = flowstep[10]
             eta = flowstep[11]
 
-            color = "#ddd"
+            # bgcolor = "#ddd"
+            # color = "white"
+            # if(status=="completed"): 
+            #     bgcolor = "#bcecb9"
+                # color = "black"
+            # elif(status=="process"):
+            #     bgcolor = "#fafeb3"
+            #     color = "black"
+            
+            bgcolor = "#0f1629"
+            color = "white"
             if(status=="completed"): 
-                color = "#bcecb9"
+                bgcolor = "#3ec292"
+                color = "black"
             elif(status=="process"):
-                color = "#fafeb3"
+                bgcolor = "#ffff46"
+                color = "black"
+            
+            bgcolor = "#0f1629"
+            color = "white"
+            if(status=="completed"): 
+                bgcolor = "#95dcc2"
+                color = "black"
+            elif(status=="process"):
+                bgcolor = "#fbfbb2"
+                color = "black"
+            
 
             response += f"""
-            <tr style='background-color:{color}'>
+            <tr style='background-color:{bgcolor}; color:{color}'>
                 <td>{step}</td>
                 <td>{description}</td>
                 <td>{status}</td>
