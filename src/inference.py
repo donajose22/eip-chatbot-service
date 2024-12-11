@@ -5,6 +5,8 @@ from langchain_sdk.Langchain_sdk import LangChainCustom
 import sys
 import requests
 from src.apigee import get_access_token
+from src.loadModel import load_model
+from . import formatter
 from config.config import global_config
 from src.mongoDbConnection import mongoDbConnection
 
@@ -43,7 +45,7 @@ def retrieve_documents(prompt):
         "'''+config["eipteam_contract_id"]+'''",
         "'''+config["rdse_contract_id"]+'''"
         ],
-        "user_email": "dona.jose@intel.com"
+        "user_email": "'''+config["user_email"]+'''"
     }
     }'''
 
@@ -53,20 +55,21 @@ def retrieve_documents(prompt):
                                  data=body,
                                  proxies=proxies)
         response.raise_for_status()
+
     except requests.exceptions.RequestException as e:
         print(f"Failed to retrieve wiki docs: {e}")
-        raise
+        raise e
 
     return response.json()
 
-def create_prompt(query_text, documents):
+def create_prompt(question, documents):
 
     prompt = '''Using the information from the provided relevant documents, please answer the following query. 
     Make sure to reference the sources in your response. Provide the links when citing the sources. 
     If you think the provided documents are not relevant to the query, refer to the conversation history to answer the query.
     If you don't know the answer, just say that you don't know, don't try to make up an answer. 
     
-    Query : '''+query_text+'''
+    Query : '''+question+'''
 
     Relevant Documents and Sources:
 
@@ -83,47 +86,50 @@ def create_prompt(query_text, documents):
     return prompt
 
 def format_json(text):
-    text = text[2:-1]
-    text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-    json_data = json.loads(text, strict=False)
-    return json_data
+    try:
+        text = text[2:-1]
+        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        json_data = json.loads(text, strict=False)
+        return json_data
+    except Exception as e:
+        print("ERROR:inference:format_json")
+        raise e
 
-def update_db(query_text, prompt, response, feedback):
-    connection_string = config["chat_db_url"]
-    collection_name = config["chat_collection_name"]
-    mongoClient = mongoDbConnection(connection_string, collection_name)
-    record = {
-        "user_wwid": "",
-        "username": "",
-        "query": query_text,
-        "prompt": prompt,
-        "response": response,
-        "feedback": feedback, 
-        "time": datetime.datetime.now()
-    }
-    resp = mongoClient.addDetails(record)
+# @inference.route("/inference/<question>",methods=["GET"])
+def generate_response(question, conversation=[]):
 
-# @inference.route("/inference/<query_text>",methods=["GET"])
-def generate_response(query_text, conversation=[]):
-
-    # retrieve relevant wiki documents
-    documents = retrieve_documents(query_text)
+    try: 
+        # retrieve relevant wiki documents
+        print("===================RETRIEVING WIKI DOCUMENTS==============================")
+        documents = retrieve_documents(question)
+    except Exception as e:
+        print("ERROR:inference:generate_response: "+str(e))
+        raise(e)
 
     # create prompt
-    prompt = create_prompt(query_text, documents['top_k_results']['response'])
+    prompt = create_prompt(question, documents['top_k_results']['response'])
 
-    llm = generate_model(conversation_history=conversation, prompt=prompt)
+    # llm = generate_model(conversation_history=conversation, prompt=prompt)
+    llm = load_model()
 
+    print("=====================GENERATING RESPONSE===================================")
     response = llm.invoke(prompt)
 
     # convert response to json format
-    json_data = format_json(response)
+    try:
+        json_data = format_json(response)
+    except Exception as e:
+        print("ERROR:inference:generate_response: "+str(e))
+        raise e
 
     # update conversation history
-    conversation = json_data["conversation"]
+    # conversation = json_data["conversation"]
 
-    # update_db(query_text, prompt, json_data['currentResponse'], "" )
+    # convert the text to html format
+    formatted_generated_response = formatter.format(question, json_data["currentResponse"])
+    resp = formatted_generated_response
 
-    return [prompt, json_data['currentResponse']]
+    print("________________________________INFERENCE RESPONSE_____________________________________")
+    print(resp)
 
-
+    return [prompt, resp]

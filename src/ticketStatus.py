@@ -34,30 +34,35 @@ def get_ticket_details(ticket_id):
 
     print("**************************GETTING TICKET STATUS********************************************")
 
-    mySql = mySqlConnection(host, port, username, password, db)
+    try:
+        mySql = mySqlConnection(host, port, username, password, db)
 
-    ticket_status_query = f'''
-    SELECT fs.id, fs.dmsId, fs.altId, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.updatedAt, fs.eta
-    FROM FlowStep fs
-    INNER JOIN (
-    SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-    FROM FlowStep fs
-    INNER JOIN (
-        SELECT supplier, recipient, MAX(rev) AS maxRev
-        FROM FlowStep
-        WHERE dmsId = '{ticket_id}' OR altId = '{ticket_id}' 
-        GROUP BY supplier, recipient
-    ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev 
-    WHERE fs.dmsId = '{ticket_id}' OR fs.altId = '{ticket_id}' 
-    group by fs.supplier, fs.recipient
-    ) AS subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass AND fs.startedAt = subq2.maxStart
-    WHERE (fs.dmsId = '{ticket_id}' OR fs.altId = '{ticket_id}') ;
-    '''
-    
-    response = """
-    """
+        ticket_status_query = f'''
+        SELECT fs.id, fs.dmsId, fs.altId, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.updatedAt, fs.eta
+        FROM FlowStep fs
+        INNER JOIN (
+        SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+        FROM FlowStep fs
+        INNER JOIN (
+            SELECT supplier, recipient, MAX(rev) AS maxRev
+            FROM FlowStep
+            WHERE dmsId = '{ticket_id}' OR altId = '{ticket_id}' 
+            GROUP BY supplier, recipient
+        ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev 
+        WHERE fs.dmsId = '{ticket_id}' OR fs.altId = '{ticket_id}' 
+        group by fs.supplier, fs.recipient
+        ) AS subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass AND fs.startedAt = subq2.maxStart
+        WHERE (fs.dmsId = '{ticket_id}' OR fs.altId = '{ticket_id}') ;
+        '''
+        
+        response = """
+        """
 
-    query_results = mySql.execute_query(ticket_status_query)
+        query_results = mySql.execute_query(ticket_status_query)
+
+    except Exception as e:
+        print("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
+
 
     if(query_results == []): 
         return None
@@ -104,8 +109,11 @@ def get_ticket_details(ticket_id):
         """
 
         flowsteps_query = create_flowsteps_query(ticket_id, supplier, recipient)
-
-        flowsteps_results = mySql.execute_query(flowsteps_query)
+        try:
+            flowsteps_results = mySql.execute_query(flowsteps_query)
+        except Exception as e:
+            print("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
+            raise e
         
         step = 1
         for flowstep in flowsteps_results:
@@ -123,27 +131,37 @@ def get_ticket_details(ticket_id):
             #     bgcolor = "#fafeb3"
             #     color = "black"
             
-            bgcolor = "#0f1629"
-            color = "white"
-            if(status=="completed"): 
-                bgcolor = "#3ec292"
-                color = "black"
-            elif(status=="process"):
-                bgcolor = "#ffff46"
-                color = "black"
+            # bgcolor = "#0f1629"
+            # color = "white"
+            # if(status=="completed"): 
+            #     bgcolor = "#3ec292"
+            #     color = "black"
+            # elif(status=="process"):
+            #     bgcolor = "#ffff46"
+            #     color = "black"
             
-            bgcolor = "#0f1629"
-            color = "white"
-            if(status=="completed"): 
-                bgcolor = "#95dcc2"
-                color = "black"
-            elif(status=="process"):
-                bgcolor = "#fbfbb2"
-                color = "black"
+            # bgcolor = "#0f1629"
+            # color = "white"
+            # if(status=="completed"): 
+            #     bgcolor = "#95dcc2"
+            #     color = "black"
+            # elif(status=="process"):
+            #     bgcolor = "#fbfbb2"
+            #     color = "black"
             
 
+            # response += f"""
+            # <tr class={status} style='background-color:{bgcolor}; color:{color}'>
+            #     <td>{step}</td>
+            #     <td>{description}</td>
+            #     <td>{status}</td>
+            #     <td>{updated_at}</td>
+            #     <td>{eta}</td>
+            # </tr>
+            # """
+
             response += f"""
-            <tr style='background-color:{bgcolor}; color:{color}'>
+            <tr class={status}>
                 <td>{step}</td>
                 <td>{description}</td>
                 <td>{status}</td>

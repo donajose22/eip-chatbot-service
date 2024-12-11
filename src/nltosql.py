@@ -1,8 +1,9 @@
 from mysql.connector import connect
 from langchain_sdk.Langchain_sdk import LangChainCustom
-from src.ticket_status import get_ticket_details
+from src.ticketStatus import get_ticket_details
 from src.mySqlConnection import mySqlConnection
-from src import formater
+from src import formatter
+from src.loadModel import load_model
 import json
 from config.config import global_config
 
@@ -464,30 +465,79 @@ def generate_model():
                             
     return llm
 
+def validate_json(json_string):
+    try:
+        # Attempt to load the JSON string
+        data = json.loads(json_string)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON: {e}")
+        return False
+
+    # Check for required fields
+    required_fields = ['query', 'type']
+    for field in required_fields:
+        if field not in data:
+            print(f"Missing required field: {field}")
+            return False
+
+    # Check for 'id' field if 'type' is 'status'
+    if data.get('type') == 'status' and 'id' not in data:
+        print("Missing required field: id (for type 'status')")
+        return False
+
+    print("JSON is valid and contains all required fields.")
+    return True
+
 def format_json(text):
-    text = text[2:-1]
-    text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-    json_data = json.loads(text, strict=False)
-    return json_data
+    try:
+        text = text[2:-1]
+        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        json_data = json.loads(text, strict=False)
+        return json_data
+    except Exception as e:
+        # raise Exception("generate:format_json:"+str(e))
+        print("ERROR:nltosql:format_json")
+        raise e
 
 
 def generate_model_response(question,prompt):
-    model=generate_model()
-    response=model.invoke([prompt, question])
-    response = format_json(response)
-    return response
-
-i=0
+    try:
+        # model=generate_model()
+        model = load_model()
+        response=model.invoke([prompt, question])
+        response = format_json(response)
+        return response
+    except Exception as e:
+        print("ERROR:nltosql:generate_model_response: "+str(e))
+        raise e
 
 def generate_response(question):
-    print("QUESTION: ", question)
-    print("=======================================================================================================")
-    resp = generate_model_response(question, prompt_sql_query)   # use llm model to create sql query
-    resp = resp["currentResponse"]
-    print("GENERATED SQL QUERY: \n", resp)
+    valid_json=False
+    try_count=1
+
+    # Generate Response and validate json
+    # Run 5 times in case of invalid json
+    while(valid_json==False and try_count<=5):
+        resp = generate_model_response(question, prompt_sql_query)   # use llm model to create sql query
+        resp = resp["currentResponse"]
+        print("GENERATED SQL QUERY: \n", resp)
+        resp = ""
+
+        # INSERT JSON VALIDATOR
+        print("**********************VALIDATING JSON**********************************************")
+        valid_json=validate_json(resp)
+        try_count+=1
+
+    if(valid_json==False):
+        raise Exception("ERROR:nltosql:Incorrect JSON response")
 
     # Convert String to json
-    query_data = json.loads(resp)
+    try:
+        query_data = json.loads(resp)
+    except Exception as e:
+        print("ERROR:nltosql: json.loads: "+str(e))
+        raise e
+    
     query = query_data['query']
     query_type = query_data['type']
     if(query_type=="status"):
@@ -498,9 +548,14 @@ def generate_response(question):
     print("=======================================================================================================")
     
     # Execute the sql query
-    mySql = mySqlConnection(host, port, username, password, db)
-    query_results = mySql.execute_query(query)
-    # query_results = execute_sql_query(query)   # execute sql query
+    try:
+        mySql = mySqlConnection(host, port, username, password, db)
+        query_results = mySql.execute_query(query)
+        # query_results = execute_sql_query(query)   # execute sql query
+    except Exception as e:
+        print("ERROR:nltosql:mySQL: "+str(e))
+        raise e
+    
     print("SQL QUERY RESULTS: \n")
     for x in query_results:
         print(x)
@@ -508,6 +563,7 @@ def generate_response(question):
     print("=======================================================================================================")
 
     # Create prompt to summarize sql query results
+    print("********************SUMMARIZING SQL QUERY RESULTS*****************************************")
     prompt = create_prompt(question, query, query_results)  
     response = generate_model_response(question, prompt)   # use llm model to summarize sql query response
     print("GENERATED RESPONSE: \n", response["currentResponse"])
@@ -515,17 +571,15 @@ def generate_response(question):
     print("=======================================================================================================")
 
     # convert the text to html format
-    formatted_generated_response = formater.format(question, response["currentResponse"])
-    
-    global i
-    i=i+1
+    formatted_generated_response = formatter.format(question, response["currentResponse"])
+
     if(query_type=="status" and ticket_details is not None):
         resp = ticket_details+f"<b>Summary</b><br> "+formatted_generated_response
         
-        query_format = """            
-            <button type="button" class="query-collapsible" id="{1}" onClick="expandCollapseContent()">SQL Query</button>
-            <div className='sql-query-content' id="{1}" style= "display:none" >{0}</div>
-        """
+        # query_format = """            
+        #     <button type="button" class="query-collapsible" id="{1}" onClick="expandCollapseContent()">SQL Query</button>
+        #     <div className='sql-query-content' id="{1}" style= "display:none" >{0}</div>
+        # """
 
         # query_format = """            
         #     <button type="button" class="query-collapsible" id="{1}">SQL Query <div class='plusminus'>+</div></button>
@@ -537,8 +591,7 @@ def generate_response(question):
     else:
         resp = formatted_generated_response
     
-    
-
     print("______________________________________NL TO SQL RESPONSE_____________________________________")
     print(resp)
+
     return [prompt, query, resp]

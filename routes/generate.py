@@ -1,8 +1,11 @@
 from flask import Blueprint,request, jsonify
 from langchain_sdk.Langchain_sdk import LangChainCustom 
-from src import inference, nltosql, formater
+from src import formatter
+from src import inference, nltosql
 from src.mongoDbConnection import mongoDbConnection
 from src.apigee import get_access_token
+from src.loadModel import load_model
+from src.sendEmail import send_email
 from config.config import global_config
 import datetime
 import json
@@ -32,11 +35,10 @@ def generate_model(prompt = None):
                             chat_conversation=True,
                             conversation_history = [],
                             system_prompt=prompt)
-                            # system_prompt=prompt
                             
     return llm
 
-def create_prompt_supervisor(question):
+def create_supervisor_prompt(question):
 
     prompt = f'''
 
@@ -86,33 +88,59 @@ def format_json(text):
         json_data = json.loads(text, strict=False)
         return json_data
     except Exception as e:
-        raise Exception("generate:format_json:"+str(e))
+        # raise Exception("generate:format_json:"+str(e))
+        print("ERROR:generate:format_json")
+        raise e
 
 
-def update_db(query_text, prompt, response, sql_query=None, feedback=None):
+def update_db(question, prompt=None, response=None, sql_query=None, feedback=None, error=None):
     config = global_config
     connection_string = config["chat_db_url"]
     collection_name = config["chat_collection_name"]
-    mongoClient = mongoDbConnection(connection_string, collection_name)
-    record = {
-        "user_wwid": "",
-        "username": "",
-        "query": query_text,
-        "prompt": prompt,
-        "response": response,
-        "sql_query": sql_query,
-        "feedback": feedback, 
-        "time": datetime.datetime.now()
-    }
-    resp = mongoClient.addDetails(record)
-    # print(resp)
+    resp=None
+    try:
+        mongoClient = mongoDbConnection(connection_string, collection_name)
+        record = {
+            "user_wwid": "",
+            "username": "",
+            "query": question,
+            "prompt": prompt,
+            "response": response,
+            "sql_query": sql_query,
+            "error": error,
+            "feedback": feedback, 
+            "time": datetime.datetime.now()
+        }
+        resp = mongoClient.addDetails(record)
+        # print(resp)
+        return resp
+    except Exception as e:
+        print("Error:generate:update_db: "+str(e))
+        raise e
 
+def send_error_email(error, question):
+    print("*******************SENDING EMAIL**********************************")
+    sender_email = config["eip_chatbot_emailu"]
+    sender_password = config["eip_chatbot_password"]
+    receiver_emails = config["receiver_emails"]
+    subject = "ERROR IN EIP CHATBOT SERVICE"
+    body = str(error)+"\nQuestion: "+question
+    # print(sender_email, sender_password)
+    send_email(sender_email, sender_password, receiver_emails, subject, body)
 
-@igenerate.route("/generate/<query_text>",methods=["GET"])
-def generate(query_text):
-
+@igenerate.route("/generate/<question>",methods=["GET"])
+def generate(question):
     global conversation
     sql_query = None
+
+    json_response = {
+        "id": None,
+        "response": "Something went wrong while processing your request. Please try again later.",
+        "is_sql_query": 0,
+        "sql_query": None
+    }
+
+    print("Question: ",question)
 
     # print("------------PREVIOUS CONVERSATION----------------------")
     # print(conversation)
@@ -120,13 +148,15 @@ def generate(query_text):
     conversation = []
 
     # create prompt check if inference or nl to sql
-    prompt = create_prompt_supervisor(query_text)
+    prompt = create_supervisor_prompt(question)
 
+    print("******************SUPERVISOR***********************************")
     # executing 5 times in case of incorrect response
     choice = "b''"
     count = 5
     while(choice=="b''" and count>0):
-        llm = generate_model(prompt)
+        # llm = generate_model(prompt)
+        llm = load_model()
         choice = llm.invoke(prompt)
         count-=1
 
@@ -135,30 +165,43 @@ def generate(query_text):
         json_data = format_json(choice)
         is_sql_query = json_data['currentResponse']
     except Exception as e:
-        is_sql_query = "0"
+        print("ERROR:generate: "+str(e))
+        send_error_email(str(e), question)
+        update_db(question, error=str(e))
+        return json_response
+
 
     try:
         if(is_sql_query == "0"):
             print("***********************INFERENCE*************************************************")
-            response_prompt, response = inference.generate_response(query_text, conversation)
+            response_prompt, response = inference.generate_response(question, conversation)
             # Formatting response to html format
-            current_response = formater.format(query_text, response)
+            # current_response = formatter.format(question, response)
 
         elif(is_sql_query == "1"):
             print("***********************NL TO SQL*************************************************")
             is_sql_query = 1
-            response_prompt, sql_query, response = nltosql.generate_response(query_text)
-            current_response = response
+            response_prompt, sql_query, response = nltosql.generate_response(question)
+            
+        else:
+            e = "ERROR: Incorrect response from supervisor model: "+is_sql_query
+            print("ERROR:generate: "+str(e))
+            send_error_email(str(e), question)
+            update_db(question, error=str(e))
+            return json_response
     except Exception as e:
-        raise Exception("Incorrect response from llm model: "+is_sql_query)
-        
+        print("ERROR:generate: "+str(e))
+        send_error_email(str(e), question)
+        update_db(question, error=str(e))
+        return json_response
+    current_response = response
 
     # update conversation history
 
     current_conversation = [
         {
             'role': 'user',
-            'content': query_text
+            'content': question
         },
         {
             'role': 'assistant',
@@ -168,14 +211,25 @@ def generate(query_text):
     conversation.append(current_conversation)
 
     # Update conversation in Database
-    update_db(query_text, response_prompt, response, sql_query)
+    print("*********UPDATING IN DB*************************************")
+    try:
+        x = update_db(question, response_prompt, response, sql_query)
+    except Exception as e:
+        print("ERROR:generate: "+str(e))
+        send_error_email(str(e), question)
+        return json_response
 
     # print(jsonify(current_response))
 
-    json_response = {
-        "response": current_response,
-        "is_sql_query": is_sql_query,
-        "sql_query": sql_query
-    }
+    json_response["response"]=current_response
+    json_response["is_sql_query"]=is_sql_query
+    json_response["sql_query"]=sql_query
+
+    # json_response = {
+    #     "id": None,
+    #     "response": current_response,
+    #     "is_sql_query": is_sql_query,
+    #     "sql_query": sql_query
+    # }
 
     return jsonify(json_response)

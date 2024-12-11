@@ -36,10 +36,22 @@ dev_config = {
 
     "eipteam_contract_id": "de7170a9-f3b4-442d-98ff-b9490058f48d",
     "rdse_contract_id": "ebaa280a-0a23-45c7-a09d-ceb2becc620b",
+    "disclosures_contract_id": "fcf129a6-9766-4e1c-ad73-458f6b5bcff7",
+
+    "user_email": "dona.jose@intel.com",
+    "eip_chatbot_emails": "sys_ediaptracker@intel.com",
+    "eip_chatbot_emailu": "sys_eip-uploads-tracker@intel.com",
+    "eip_chatbot_email": "eipchatbot@intel.com",
+    "eip_chatbot_password": os.environ["EIP_CHATBOT_EMAIL_PASSWORDU"],
+    "receiver_emails": [
+        "dona.jose@intel.com"
+    ],
 
     "ssl": {
       "ca": 'IntelSHA256RootCA-base64.crt',
     },
+
+    "llm": None,
     
 }
 

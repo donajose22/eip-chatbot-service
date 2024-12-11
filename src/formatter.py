@@ -1,4 +1,5 @@
 from langchain_sdk.Langchain_sdk import LangChainCustom 
+from src.loadModel import load_model
 from config.config import global_config
 import json
 
@@ -97,22 +98,33 @@ def create_formatter_prompt(question, input):
     return prompt
 
 def format_json(text):
-    text = text[2:-1]
-    text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-    json_data = json.loads(text, strict=False)
-    return json_data
+    try:
+        text = text[2:-1]
+        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        json_data = json.loads(text, strict=False)
+        return json_data
+    except Exception as e:
+        # raise Exception("generate:format_json:"+str(e))
+        print("ERROR:formatter:format_json")
+        raise e
 
 def format(question, input):
     print("****************************Formatting********************************************************")
 
-    model = generate_model()
+    # model = generate_model()
+    model = load_model()
 
     input_prompt = create_formatter_prompt(question, input)
 
     response = model.invoke(input_prompt)
 
     # convert response to json format
-    json_data = format_json(response)
+    try:
+        json_data = format_json(response)
+    except Exception as e:
+        print("ERROR:formatter:format: "+str(e))
+        raise e
+    
     formatted_response = json_data["currentResponse"]
 
     # print(formatted_response)

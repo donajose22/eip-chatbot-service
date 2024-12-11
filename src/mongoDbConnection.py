@@ -33,8 +33,10 @@ class mongoDbConnection():
             print("*****************************************")
             return result
         except pymongo.errors.DuplicateKeyError:
+            print("MongoDB ERROR: Duplicate Key Error")
             return({"message":"Duplicate Key Error"},200)
         except Exception as e:
+            print("MongoDB:addDetails"+str(e))
             raise Exception("MongoDB:addDetails:"+str(e))
 
 
