@@ -2,7 +2,6 @@ from flask import Flask
 from flask_cors import CORS
 from flask_talisman import Talisman
 from langchain_sdk.Langchain_sdk import LangChainCustom 
-import config
 from config.config import global_config
 import json
 
@@ -16,8 +15,10 @@ def hello_world():
 
 #--------------------------
 from routes.generate import igenerate
+from routes.feedback import ifeedback
 #--------------------------
 app.register_blueprint(igenerate, url_prefix='/')
+app.register_blueprint(ifeedback, url_prefix='/')
 #--------------------------
 
 def generate_model(prompt = None):
@@ -52,5 +53,6 @@ if __name__ == '__main__':
         "llm": encoded_model
     }
     save_model(model_json)
+    print("Model created and saved.")
 
     app.run(debug=True, host='0.0.0.0', port=5000)

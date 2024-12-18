@@ -8,6 +8,7 @@ ADD .venv/Lib/site-packages/langchain_sdk langchain_sdk
 
 ADD main.py main.py
 ADD config config
+ADD llm llm
 ADD routes routes
 ADD src src
 ADD IntelSHA256RootCA-base64.crt IntelSHA256RootCA-base64.crt

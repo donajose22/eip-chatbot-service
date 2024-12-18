@@ -43,7 +43,8 @@ def retrieve_documents(prompt):
         "top_k": 3,
         "sources": [
         "'''+config["eipteam_contract_id"]+'''",
-        "'''+config["rdse_contract_id"]+'''"
+        "'''+config["rdse_contract_id"]+'''",
+        "'''+config["disclosures_contract_id"]+'''"
         ],
         "user_email": "'''+config["user_email"]+'''"
     }
@@ -68,6 +69,8 @@ def create_prompt(question, documents):
     Make sure to reference the sources in your response. Provide the links when citing the sources. 
     If you think the provided documents are not relevant to the query, refer to the conversation history to answer the query.
     If you don't know the answer, just say that you don't know, don't try to make up an answer. 
+
+    Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
     
     Query : '''+question+'''
 
@@ -82,13 +85,76 @@ def create_prompt(question, documents):
     \nDocument : '''+documents[2]['Result:']+''' 
     \nSource : ''' + documents[2]['Source'] +'''
 
+    Instructions for generating response in html format.
+
+    Do not modify any of the content. Only add the appropriate HTML tags wherever necessary.
+
+    Do not include any <html> or <body> tags. The output should contain only the content and relevant HTML tags within the body of the page.
+
+    If there are any SQL Queries in the text, it should be highlighted and emphasized.
+
+    Paragraphs: Each paragraph should be separated by the <p></p> tags.
+
+    Unordered Lists: Items in an unordered list should be denoted using the <ul> and <li> tags. Use - to mark list items in the original text and convert them to HTML list items.
+
+    Ordered Lists: Items in an ordered list should be denoted using the <ol> and <li> tags. Convert numbered points in the text to an ordered list.
+
+    Bold Important Words: Some words that are important or emphasized (such as terms, names, or concepts) should be enclosed in the <b></b> tags. You can infer the importance based on context. 
+    Only highlight the important words once in the beginning. Emphasize at most 2 words/phrases in a sentence. Emphasize the main words that answer the question.
+
+    Line Breaks: Use <br> where necessary for line breaks (i.e., where a paragraph should continue on a new line but does not require a full paragraph break).
+
+    Images: If the text contains image URLs, use the <img> tag to insert the image with the src attribute. Ensure the image source URL is inserted properly, for example:
+    <img src="URL_HERE" alt="Description of the image">
+
+    Links: For any webpage URLs or references to external sources, use the <a> tag to create clickable links. The link should point to the source, and the anchor text should describe the content or provide context. The links should open in a new tab. For example:
+    <a href="URL_HERE">Link Description</a>
+
+    Headings: If the text contains headings or subheadings, use the appropriate heading tags (<h1>, <h2>, etc.) based on the hierarchy of the text. For example, major headings should use <h1>, subheadings should use <h2>, and so on.
+
+    Additional Formatting: If there are any other formatting elements (such as italics, bold, etc.), make sure to convert them properly into HTML tags (<i></i> for italics, <b></b> for bold, etc.).
+
+    Example Input:
+
+    "Here is a sample paragraph. It's followed by a list of items:
+
+    - Item one
+    - Item two
+    - Item three
+
+    Also, visit this page for more information: www.example.com
+
+    Here's an important image:
+    http://example.com/sample-image.jpg"
+
+    Expected HTML Output:
+
+    "<p>Here is a sample paragraph. It's followed by a list of items:</p>
+
+    <ul>
+    <li>Item one</li>
+    <li>Item two</li>
+    <li>Item three</li>
+    </ul>
+
+    <p>Also, visit this page for more information: <a href="http://www.example.com">www.example.com</a></p>
+
+    <p>Here's an important image:</p>
+    <img src="http://example.com/sample-image.jpg" alt="Sample Image">"
+
+
+    Do not include the <html> or <body> tags in the output. 
+    Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
+    Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
+    Do not truncate the response. Make sure all the information needed is present in the response.
+
     '''
     return prompt
 
 def format_json(text):
     try:
-        text = text[2:-1]
-        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        # text = text[2:-1]
+        # text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
         json_data = json.loads(text, strict=False)
         return json_data
     except Exception as e:
@@ -125,9 +191,10 @@ def generate_response(question, conversation=[]):
     # update conversation history
     # conversation = json_data["conversation"]
 
+    resp = json_data['currentResponse']
     # convert the text to html format
-    formatted_generated_response = formatter.format(question, json_data["currentResponse"])
-    resp = formatted_generated_response
+    # formatted_generated_response = formatter.format(question, json_data["currentResponse"])
+    # resp = formatted_generated_response
 
     print("________________________________INFERENCE RESPONSE_____________________________________")
     print(resp)

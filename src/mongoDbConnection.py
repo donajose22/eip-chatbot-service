@@ -31,13 +31,30 @@ class mongoDbConnection():
             print("*****************************************")
             print("Record added to MongoDB")
             print("*****************************************")
-            return result
+            # print(result.inserted_id)
+            return result.inserted_id
         except pymongo.errors.DuplicateKeyError:
             print("MongoDB ERROR: Duplicate Key Error")
             return({"message":"Duplicate Key Error"},200)
         except Exception as e:
             print("MongoDB:addDetails"+str(e))
             raise Exception("MongoDB:addDetails:"+str(e))
+    
+    def updateDetails(self, _id, record:dict):
+        try:
+            database = self.client["DMS_chat"]
+            collection = database[self.collection_name]
+            data = {'$set': record}
+            result = collection.update_one(_id, data)
+            print("*****************************************")
+            print("Record Updated")
+            print("*****************************************")
+        except pymongo.errors.DuplicateKeyError:
+            print("MongoDB ERROR: Duplicate Key Error")
+            return({"message":"Duplicate Key Error"},200)
+        except Exception as e:
+            print("MongoDB:updateDetails"+str(e))
+            raise Exception("MongoDB:updateDetails:"+str(e))
 
 
 # class MongoDbConnection():

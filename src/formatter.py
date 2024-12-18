@@ -93,14 +93,16 @@ def create_formatter_prompt(question, input):
     If it is already in html format, don't change that portion. Only format the portion that is not already in html format.
     Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
     Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
+    Do not truncate the response. Make sure all the information provided is present in the response.
     '''
 
     return prompt
 
 def format_json(text):
     try:
-        text = text[2:-1]
-        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        # text = text[2:-1]
+        # text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        # print("TEXT AFTER REPLACING\n", text)
         json_data = json.loads(text, strict=False)
         return json_data
     except Exception as e:
@@ -109,7 +111,7 @@ def format_json(text):
         raise e
 
 def format(question, input):
-    print("****************************Formatting********************************************************")
+    print("****************************FORMATTING********************************************************")
 
     # model = generate_model()
     model = load_model()

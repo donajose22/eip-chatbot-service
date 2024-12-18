@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 dev_config = {
-    "cert_path": "certificate_chain.pem",
     "auth_url": "https://apis-internal.intel.com/v1/auth/token",
     "apigee": {
         "token_url_internal": "https://apis-internal.intel.com/v1/auth/token",
@@ -36,15 +35,17 @@ dev_config = {
 
     "eipteam_contract_id": "de7170a9-f3b4-442d-98ff-b9490058f48d",
     "rdse_contract_id": "ebaa280a-0a23-45c7-a09d-ceb2becc620b",
-    "disclosures_contract_id": "fcf129a6-9766-4e1c-ad73-458f6b5bcff7",
+    "disclosures_contract_id": "13e5a32f-f129-4760-9867-ab1da52d400c",
 
     "user_email": "dona.jose@intel.com",
     "eip_chatbot_emails": "sys_ediaptracker@intel.com",
     "eip_chatbot_emailu": "sys_eip-uploads-tracker@intel.com",
     "eip_chatbot_email": "eipchatbot@intel.com",
-    "eip_chatbot_password": os.environ["EIP_CHATBOT_EMAIL_PASSWORDU"],
+    "eip_chatbot_emaild": "dona.jose@intel.com",
+    "eip_chatbot_password": os.environ["EIP_CHATBOT_EMAIL_PASSWORD"],
     "receiver_emails": [
         "dona.jose@intel.com"
+        "geetha.d@intel.com"
     ],
 
     "ssl": {

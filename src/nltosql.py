@@ -286,10 +286,11 @@ def create_prompt(question, sql_query, sql_query_results):
     You have been provided with the database tables and schema details for your reference.
     Do not mention about the provided sql query results in the response.
 
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id always has 5 digits while the dms id has 11 digits. Provide the status details of the ticket.
-    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide all the details of the FlowSteps of the most recent revision and pass.
+    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id usually has 5 digits while the dms id usually has 11 digits. Provide the status details of the ticket.
+    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide a summary the details of the FlowSteps of the most recent revision and pass.
     Important details include: unique supplier recipient pair, dms id, alt id, rev, pass, status, eta, updatedAt.
     Find the details from the SQL Query Results by looking at the SQL Query.
+    Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
 
     Input Question: {question}
 
@@ -446,6 +447,70 @@ def create_prompt(question, sql_query, sql_query_results):
     updatedAt - Type: datetime, Description: updated at time
     deletedAt - Type: datetime, Description: deleted at time
 
+
+    Instructions for generating response in html format.
+
+    Do not modify any of the content. Only add the appropriate HTML tags wherever necessary.
+
+    Do not include any <html> or <body> tags. The output should contain only the content and relevant HTML tags within the body of the page.
+
+    If there are any SQL Queries in the text, it should be highlighted and emphasized.
+
+    Paragraphs: Each paragraph should be separated by the <p></p> tags.
+
+    Unordered Lists: Items in an unordered list should be denoted using the <ul> and <li> tags. Use - to mark list items in the original text and convert them to HTML list items.
+
+    Ordered Lists: Items in an ordered list should be denoted using the <ol> and <li> tags. Convert numbered points in the text to an ordered list.
+
+    Bold Important Words: Some words that are important or emphasized (such as terms, names, or concepts) should be enclosed in the <b></b> tags. You can infer the importance based on context. 
+    Only highlight the important words once in the beginning. Emphasize at most 2 words/phrases in a sentence. Emphasize the main words that answer the question.
+
+    Line Breaks: Use <br> where necessary for line breaks (i.e., where a paragraph should continue on a new line but does not require a full paragraph break).
+
+    Images: If the text contains image URLs, use the <img> tag to insert the image with the src attribute. Ensure the image source URL is inserted properly, for example:
+    <img src="URL_HERE" alt="Description of the image">
+
+    Links: For any webpage URLs or references to external sources, use the <a> tag to create clickable links. The link should point to the source, and the anchor text should describe the content or provide context. The links should open in a new tab. For example:
+    <a href="URL_HERE">Link Description</a>
+
+    Headings: If the text contains headings or subheadings, use the appropriate heading tags (<h1>, <h2>, etc.) based on the hierarchy of the text. For example, major headings should use <h1>, subheadings should use <h2>, and so on.
+
+    Additional Formatting: If there are any other formatting elements (such as italics, bold, etc.), make sure to convert them properly into HTML tags (<i></i> for italics, <b></b> for bold, etc.).
+
+    Example Input:
+
+    "Here is a sample paragraph. It's followed by a list of items:
+
+    - Item one
+    - Item two
+    - Item three
+
+    Also, visit this page for more information: www.example.com
+
+    Here's an important image:
+    http://example.com/sample-image.jpg"
+
+    Expected HTML Output:
+
+    "<p>Here is a sample paragraph. It's followed by a list of items:</p>
+
+    <ul>
+    <li>Item one</li>
+    <li>Item two</li>
+    <li>Item three</li>
+    </ul>
+
+    <p>Also, visit this page for more information: <a href="http://www.example.com">www.example.com</a></p>
+
+    <p>Here's an important image:</p>
+    <img src="http://example.com/sample-image.jpg" alt="Sample Image">"
+
+
+    Do not include the <html> or <body> tags in the output. 
+    Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
+    Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
+    Do not truncate the response. Make sure all the information needed is present in the response.
+
     """
 
     return response_prompt
@@ -465,6 +530,17 @@ def generate_model():
                             
     return llm
 
+def format_json(text):
+    try:
+        # text = text[2:-1]
+        # text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
+        json_data = json.loads(text, strict=False)
+        return json_data
+    except Exception as e:
+        # raise Exception("generate:format_json:"+str(e))
+        print("ERROR:nltosql:format_json")
+        raise e
+
 def validate_json(json_string):
     try:
         # Attempt to load the JSON string
@@ -474,31 +550,20 @@ def validate_json(json_string):
         return False
 
     # Check for required fields
+    print("checking required fields")
     required_fields = ['query', 'type']
     for field in required_fields:
         if field not in data:
             print(f"Missing required field: {field}")
             return False
-
+    print("no missing fields1")
     # Check for 'id' field if 'type' is 'status'
-    if data.get('type') == 'status' and 'id' not in data:
+    if data['type'] == 'status' and 'id' not in data:
         print("Missing required field: id (for type 'status')")
         return False
-
+    print("no missing fields2")
     print("JSON is valid and contains all required fields.")
     return True
-
-def format_json(text):
-    try:
-        text = text[2:-1]
-        text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-        json_data = json.loads(text, strict=False)
-        return json_data
-    except Exception as e:
-        # raise Exception("generate:format_json:"+str(e))
-        print("ERROR:nltosql:format_json")
-        raise e
-
 
 def generate_model_response(question,prompt):
     try:
@@ -519,25 +584,30 @@ def generate_response(question):
     # Run 5 times in case of invalid json
     while(valid_json==False and try_count<=5):
         resp = generate_model_response(question, prompt_sql_query)   # use llm model to create sql query
-        resp = resp["currentResponse"]
-        print("GENERATED SQL QUERY: \n", resp)
-        resp = ""
-
+        resp = resp['currentResponse']
         # INSERT JSON VALIDATOR
         print("**********************VALIDATING JSON**********************************************")
         valid_json=validate_json(resp)
-        try_count+=1
+        try_count+=1        
 
     if(valid_json==False):
         raise Exception("ERROR:nltosql:Incorrect JSON response")
+    
+    # resp = format_json(resp)
+    # resp = resp["currentResponse"]
+    # print("GENERATED SQL QUERY: \n", resp)
+
 
     # Convert String to json
     try:
+        # resp = format_json(resp)
+        # query_data = resp["currentResponse"]
         query_data = json.loads(resp)
+        print("GENERATED SQL QUERY: \n", query_data)
     except Exception as e:
         print("ERROR:nltosql: json.loads: "+str(e))
         raise e
-    
+
     query = query_data['query']
     query_type = query_data['type']
     if(query_type=="status"):
@@ -571,7 +641,8 @@ def generate_response(question):
     print("=======================================================================================================")
 
     # convert the text to html format
-    formatted_generated_response = formatter.format(question, response["currentResponse"])
+    # formatted_generated_response = formatter.format(question, response["currentResponse"])
+    formatted_generated_response = response['currentResponse']
 
     if(query_type=="status" and ticket_details is not None):
         resp = ticket_details+f"<b>Summary</b><br> "+formatted_generated_response

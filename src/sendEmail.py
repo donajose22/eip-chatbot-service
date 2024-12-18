@@ -1,6 +1,7 @@
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import os
 
 def send_email(sender_email, sender_password, receiver_emails, subject, body):
     try:
@@ -25,3 +26,11 @@ def send_email(sender_email, sender_password, receiver_emails, subject, body):
         print("Email sent successfully")
     except Exception as e:
         print(f"Failed to send email: {e}")
+
+
+# sender_email = "eipchatbot@intel.com"
+# sender_password = os.environ["EIP_CHATBOT_EMAIL_PASSWORD"]
+# receiver_emails = ["dona.jose@intel.com", "geetha.d@intel.com"]
+# subject = "ERROR IN EIP CHATBOT SERVICE"
+# body = "body"
+# send_email(sender_email, sender_password, receiver_emails, subject, body)
