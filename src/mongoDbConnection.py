@@ -32,7 +32,7 @@ class mongoDbConnection():
             print("Record added to MongoDB")
             print("*****************************************")
             # print(result.inserted_id)
-            return result.inserted_id
+            return result
         except pymongo.errors.DuplicateKeyError:
             print("MongoDB ERROR: Duplicate Key Error")
             return({"message":"Duplicate Key Error"},200)

@@ -2,6 +2,7 @@ from flask import Blueprint,request, jsonify
 from langchain_sdk.Langchain_sdk import LangChainCustom 
 from src.mySqlConnection import mySqlConnection
 from src.mongoDbConnection import mongoDbConnection
+from src.loadModel import load_model
 from src.ticketStatus import get_ticket_details
 from src.sendEmail import send_email
 from config.config import global_config
@@ -32,16 +33,16 @@ def generate_model(prompt = None):
     client_id = global_config["genai_client_id"]
     client_secret = global_config["genai_secret"]
 
-    if(prompt==None):
-        prompt = 'Summarize everything in 100 words.'
-    llm = LangChainCustom(client_id=client_id,
-                            client_secret=client_secret,
-                            # model="gpt-4-turbo",
-                            model = "gpt-4o",
-                            temperature=1,
-                            chat_conversation=True,
-                            conversation_history = [],
-                            system_prompt=prompt)
+    # if(prompt==None):
+    #     prompt = 'Summarize everything in 100 words.'
+    # llm = LangChainCustom(client_id=client_id,
+    #                         client_secret=client_secret,
+    #                         model = "gpt-4o",
+    #                         temperature=1,
+    #                         chat_conversation=True,
+    #                         conversation_history = [],
+    #                         system_prompt=prompt)
+    llm = load_model()
     return llm
 
 def retrieve_documents(prompt):
@@ -84,7 +85,10 @@ def create_supervisor_prompt(question):
     prompt = """
 
     You are an intelligent assistant that evaluates user queries to decide the best way to respond. Based on the user's question, determine if it is more appropriate to provide a direct response (inference) or to generate an SQL query that can be executed on a database.
+    
     If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. It requires an SQL query.
+    If the question only contains a string with some text characters followed by an integer value, consider that integer value as the dms id/alt id of a ticket.
+    Example: "DA11166", means the ticket alt id is 11166
     Please analyze the following user query:
 
     Respond with a json object in the following format. It should have 3 fields: type, response and id.
@@ -98,6 +102,7 @@ def create_supervisor_prompt(question):
     }"
     
     In case of  DIRECT RESPONSE
+    - If the question is related to EIP (External IP), IPs, IPX, DMS, Intel, Licensing/Access Granting, the response should be a direct response.
     Response with the json
     "{
         "type": "inference"
@@ -276,8 +281,7 @@ def create_supervisor_prompt(question):
     
     Based on the given information, refer to the inputs given below, generate the response in an appropriate format.
     
-    QUESTION: 
-    """+question+"""
+    
     
     EXAMPLES
     \n
@@ -298,43 +302,47 @@ def create_supervisor_prompt(question):
             "type": "other"}"
         
     \n
-    Example 4 - Status of active flowstep of ticket 14017507755, 
+    Example 4 - Status of active flowstep of ticket 15016930033, 
         the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
+        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
             FROM FlowStep fs
+            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
+            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
             INNER JOIN (
-            SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-            FROM FlowStep fs
-            INNER JOIN (
-                SELECT supplier, recipient, MAX(rev) AS maxRev
-                FROM FlowStep
-                WHERE dmsId = '15016930033' OR altId = '15016930033' 
-                GROUP BY supplier, recipient
-            ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev 
-            WHERE fs.dmsId = '15016930033' OR fs.altId = '15016930033' 
-            group by fs.supplier, fs.recipient
-            ) AS subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass AND fs.startedAt = subq2.maxStart
-            WHERE (fs.dmsId = '15016930033' OR fs.altId = '15016930033') ;",
+                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+                FROM FlowStep fs
+                INNER JOIN (
+                    SELECT supplier, recipient, MAX(rev) AS maxRev
+                    FROM FlowStep
+                    WHERE dmsId = '15016930033' OR altId = '15016930033'
+                    GROUP BY supplier, recipient
+                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
+                WHERE fs.dmsId = '15016930033' OR fs.altId = '15016930033'
+                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
+            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
+            WHERE fs.dmsId = '15016930033' OR fs.altId = '15016930033';",
             "type": "status",
             "id": "14017507755"}"
     \n
     Example 5 - 14017507755, 
         the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStepMapping fsm, FlowStep fs
-            INNER JOIN (
-            SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
             FROM FlowStep fs
+            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
+            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
             INNER JOIN (
-                SELECT supplier, recipient, MAX(rev) AS maxRev
-                FROM FlowStep
-                WHERE dmsId = '14017507755' OR altId = '14017507755' 
-                GROUP BY supplier, recipient
-            ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev 
-            WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755' 
-            group by fs.supplier, fs.recipient
-            ) AS subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass 
-            WHERE (fs.dmsId = '14017507755' OR fs.altId = '14017507755') AND fsm.id = fs.mappingId ",
+                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+                FROM FlowStep fs
+                INNER JOIN (
+                    SELECT supplier, recipient, MAX(rev) AS maxRev
+                    FROM FlowStep
+                    WHERE dmsId = '14017507755' OR altId = '14017507755'
+                    GROUP BY supplier, recipient
+                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
+                WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755'
+                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
+            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
+            WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755';",
             "type": "status",
             "id": "14017507755"}"
             
@@ -343,12 +351,80 @@ def create_supervisor_prompt(question):
         "{
             "type": "inference"
         }"
+    \n
+    Example 7 - DA14017507755, 
+        the response will be something like this 
+        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
+            FROM FlowStep fs
+            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
+            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
+            INNER JOIN (
+                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+                FROM FlowStep fs
+                INNER JOIN (
+                    SELECT supplier, recipient, MAX(rev) AS maxRev
+                    FROM FlowStep
+                    WHERE dmsId = '14017507755' OR altId = '14017507755'
+                    GROUP BY supplier, recipient
+                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
+                WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755'
+                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
+            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
+            WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755';",
+            "type": "status",
+            "id": "14017507755"}"
+    \n
+    Example 8 - DA14017, 
+        the response will be something like this 
+        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
+            FROM FlowStep fs
+            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
+            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
+            INNER JOIN (
+                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+                FROM FlowStep fs
+                INNER JOIN (
+                    SELECT supplier, recipient, MAX(rev) AS maxRev
+                    FROM FlowStep
+                    WHERE dmsId = '14017' OR altId = '14017'
+                    GROUP BY supplier, recipient
+                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
+                WHERE fs.dmsId = '14017' OR fs.altId = '14017'
+                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
+            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
+            WHERE fs.dmsId = '14017' OR fs.altId = '14017';",
+            "type": "status",
+            "id": "14017"}"
+    \n
+    Example 9 - 14017, 
+        the response will be something like this 
+        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
+            FROM FlowStep fs
+            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
+            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
+            INNER JOIN (
+                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
+                FROM FlowStep fs
+                INNER JOIN (
+                    SELECT supplier, recipient, MAX(rev) AS maxRev
+                    FROM FlowStep
+                    WHERE dmsId = '14017' OR altId = '14017'
+                    GROUP BY supplier, recipient
+                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
+                WHERE fs.dmsId = '14017' OR fs.altId = '14017'
+                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
+            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
+            WHERE fs.dmsId = '14017' OR fs.altId = '14017';",
+            "type": "status",
+            "id": "14017"}"
 
             
     Please provide your response in the form of a valid JSON string. 
     Ensure that the JSON is properly formatted, including necessary quotes around keys and string values, proper escaping of special characters if any, and valid data types (e.g., strings, numbers, booleans, arrays, and objects). 
     Your output should not contain any extra text outside the JSON string to avoid errors during parsing.
     
+    QUESTION: 
+    """+question+"""
     """
     return prompt
 
@@ -361,18 +437,7 @@ def create_inference_prompt(question, documents):
 
     Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
     
-    Query : '''+question+'''
 
-    Relevant Documents and Sources:
-
-    Document : '''+documents[0]['Result:']+''' 
-    \nSource: ''' + documents[0]['Source'] +'''
-
-    \nDocument : '''+documents[1]['Result:']+''' 
-    \nSource : ''' + documents[1]['Source'] +'''
-
-    \nDocument : '''+documents[2]['Result:']+''' 
-    \nSource : ''' + documents[2]['Source'] +'''
 
     Instructions for generating response in html format.
 
@@ -436,6 +501,19 @@ def create_inference_prompt(question, documents):
     Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
     Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
     Do not truncate the response. Make sure all the information needed is present in the response.
+    
+    Query : '''+question+'''
+
+    Relevant Documents and Sources:
+
+    Document : '''+documents[0]['Result:']+''' 
+    \nSource: ''' + documents[0]['Source'] +'''
+
+    \nDocument : '''+documents[1]['Result:']+''' 
+    \nSource : ''' + documents[1]['Source'] +'''
+
+    \nDocument : '''+documents[2]['Result:']+''' 
+    \nSource : ''' + documents[2]['Source'] +'''
 
     '''
     return prompt
@@ -443,21 +521,26 @@ def create_inference_prompt(question, documents):
 def create_sql_summary_prompt(question, sql_query, sql_query_results):
     response_prompt = f"""
     You are an agent designed to interact with a SQL query results.
+    Instructions for SQL Query Result Interaction
+
     Given an input question, and the sql database query results for that question, generate a summary of the query results to answer the question.
     You have been provided with the database tables and schema details for your reference.
     Do not mention about the provided sql query results in the response.
 
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id usually has 5 digits while the dms id usually has 11 digits. Provide the status details of the ticket.
-    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide a summary the details of the FlowSteps of the most recent revision and pass.
-    Important details include: unique supplier recipient pair, dms id, alt id, rev, pass, status, eta, updatedAt.
+    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id usually has 4-5 digits while the dms id usually has 11 digits. Provide the status details of the ticket.
+    If the question only contains a string with some text characters followed by an integer value, consider that integer value as the dms id/alt id of a ticket.
+    Example: "DA11166", means the ticket alt id is 11166
+    
+    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide a summary the details of the latest FlowStep of the most recent revision and pass.
+    The ticket is only completed if all of the steps are completed. Only give the details of the latest FlowStep that is either in process or pending state. Do not give details of the notStarted FlowSteps.
+    Do not include any addidional flowsteps.
+    In the summary, include the ticket id, current Flowstep header, eta for the FlowStep and the Action Required for the ETA.
+    The Action is Required by the owner provided in the sql results.
+    In case the ticket has two different supplier recipient pairs, give the summary for both suppliers and specify the supplier name.
     Find the details from the SQL Query Results by looking at the SQL Query.
+    If the status is "process", display it as "in process".
+    Do not put in any repetitive information. Do not add any additional details than what are mentioned in the examples.
     Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
-
-    Input Question: {question}
-
-    SQL Query: {sql_query}
-
-    SQL Query Results: {sql_query_results}
 
     \n
     Database Tables and Schemas
@@ -607,6 +690,29 @@ def create_sql_summary_prompt(question, sql_query, sql_query_results):
     createdAt - Type: datetime, Description: created at time
     updatedAt - Type: datetime, Description: updated at time
     deletedAt - Type: datetime, Description: deleted at time
+    
+    Example Input: 12345
+    
+    Expected Summary:
+    "Ticket 12345 FlowStep "Cadence Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Cadence"
+    
+    Example Input: 54321
+    
+    Expected Summary:
+    "For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Cadence
+    
+    For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Siemens"
+    
+    Example Input: 23456
+    
+    Expected Summary:
+    "For Supplier Cadence, Ticket 23456 FlowStep "Step Zerp" is currently in process, with an ETA of 2025-01-09 9:55:18. Last updated on 2025-01-07.
+    
+    For Supplier Siemens, Ticket 23456 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-09 9:55:18. Last updated on 2025-01-08.
+    Action Required By: Siemens"
 
 
     Instructions for generating response in html format.
@@ -639,38 +745,40 @@ def create_sql_summary_prompt(question, sql_query, sql_query_results):
     Additional Formatting: If there are any other formatting elements (such as italics, bold, etc.), make sure to convert them properly into HTML tags (<i></i> for italics, <b></b> for bold, etc.).
 
     Example Input:
-
-    "Here is a sample paragraph. It's followed by a list of items:
-
-    - Item one
-    - Item two
-    - Item three
-
-    Also, visit this page for more information: www.example.com
-
-    Here's an important image:
-    http://example.com/sample-image.jpg"
+    "Ticket 12345 FlowStep "Cadence Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Cadence"
 
     Expected HTML Output:
 
-    "<p>Here is a sample paragraph. It's followed by a list of items:</p>
-
-    <ul>
-    <li>Item one</li>
-    <li>Item two</li>
-    <li>Item three</li>
-    </ul>
-
-    <p>Also, visit this page for more information: <a href="http://www.example.com">www.example.com</a></p>
-
-    <p>Here's an important image:</p>
-    <img src="http://example.com/sample-image.jpg" alt="Sample Image">"
+    "<p>Ticket 12345 "Cadence Approves DMAA" FlowStep is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
+    <b>Action Required By: Cadence</b></p>"
+    
+    Example Input: 
+    "For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Cadence
+    
+    For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
+    Action Required By: Siemens"
+    
+    Expected HTML Output:
+    "<p>For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
+    <b>Action Required By: Cadence</b></p>
+    
+    <p>For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
+    <b>Action Required By: Siemens</b></p>"
 
 
     Do not include the <html> or <body> tags in the output. 
     Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
     Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
     Do not truncate the response. Make sure all the information needed is present in the response.
+    
+    
+    Input Question: {question}
+
+    SQL Query: {sql_query}
+
+    SQL Query Results: {sql_query_results}
 
     """
 
@@ -703,13 +811,16 @@ def update_db(question, prompt=None, response=None, sql_query=None, feedback=Non
 
 def format_json(text):
     try:
-        # text = text[2:-1]
+        byte_data = eval(text)
+        json_str = byte_data.decode("utf-8")
+        json_data = json.loads(json_str)
+        # text = text[1:]
         # text = text.replace("\\'", "'").replace('\\"', '"').replace("\\\\n", "\n")
-        json_data = json.loads(text, strict=False)
+        # print(text)
+        # json_data = json.loads(text, strict=False)
         return json_data
     except Exception as e:
-        # raise Exception("generate:format_json:"+str(e))
-        print("ERROR:nltosql:format_json")
+        print("ERROR:format_json:"+str(e))
         raise e
 
 def validate_json(json_string):
@@ -729,9 +840,6 @@ def validate_json(json_string):
             return False
     
     # Check for 'response' and 'id' field if 'type' is 'status' or 'other
-    # if data['type'] == 'inference' and 'response' not in data:
-    #     print("Missing required field: response (for type 'inference')")
-    #     return False
     if data['type'] == 'other' and 'response' not in data:
         print("Missing required field: response (for type 'other')")
         return False
@@ -745,7 +853,7 @@ def validate_json(json_string):
     return True
 
 def send_error_email(error, question):
-    print("*******************SENDING EMAIL**********************************")
+    print("SENDING EMAIL")
     sender_email = config["eip_chatbot_email"]
     sender_password = config["eip_chatbot_password"]
     receiver_emails = config["receiver_emails"]
@@ -767,6 +875,10 @@ def generate(question):
         "sql_query": None,
         "time_taken": None,
     }
+    prompt=None
+    resp=None
+    sql_query=None
+    error=None
 
     print("Question: ",question)
     
@@ -774,32 +886,43 @@ def generate(question):
         llm = generate_model()
         start_time = time.time()
         # create prompt
-        prompt = create_supervisor_prompt(question)
+        supervisor_prompt = create_supervisor_prompt(question)
         print("created prompt")
         print('-------------INVOKING SUPERVISOR MODEL----------------')
         s = time.time()
-        response=llm.invoke(prompt)
+        response=llm.invoke(supervisor_prompt)
         et = time.time()
         print("Time taken by supervisor: ", et-s)
         print("--------------RECEIVED RESPONSE---------------")
         
-        try:
-            json.loads(response)
-        except:
-            print("json loads throwing error")
-
-        response = json.loads(response)
+        response = format_json(response)
+        
         # print(response)
+        # try:
+        #     check = json.loads(response)
+        # except Exception as e:
+        #     print("json.loads error")
+        #     send_error_email(str(e), question)
+        #     update_db(question, prompt=supervisor_prompt, response=response, error=str(e))
+        #     return json_response
+
+        # response = json.loads(response)
+        # # print(response)
+        
         try:
             valid_json=validate_json(response['currentResponse'])
         except Exception as e:
             print("ERROR:generate:validate_json: "+str(e))
             send_error_email(str(e), question)
-            update_db(question, error=str(e))
+            update_db(question, prompt=supervisor_prompt, response=response, error=str(e))
             return json_response
         
         if(valid_json==False):
-            raise Exception("ERROR:generate:Incorrect JSON response")
+            print("ERROR:generate::Incorrect/Invalid JSON response")
+            send_error_email("ERROR:generate::Incorrect/Invalid JSON response", question)
+            update_db(question, prompt=supervisor_prompt, response=response, error=str(e))
+            return json_response
+        
         response = json.loads(response['currentResponse'])
         if(response["type"]=="inference"):
             try: 
@@ -817,11 +940,13 @@ def generate(question):
 
             print("------SUMMARIZING RETRIEVED DOCUMENTS------------")
             s = time.time()
-            inference_response = llm.invoke(create_inference_prompt(question, documents['top_k_results']['response']))
+            prompt = create_inference_prompt(question, documents['top_k_results']['response'])
+            inference_response = llm.invoke(prompt)
             et = time.time()
             print("Time taken for inference: ", et-s)
-            inference_response = json.loads(inference_response)
-            # inference_response = format_json(inference_response)
+            
+            # inference_response = json.loads(inference_response)
+            inference_response = format_json(inference_response)
             resp = inference_response['currentResponse']
         
         else:
@@ -839,12 +964,14 @@ def generate(question):
                 return json_response
             
             sql_summary_prompt = create_sql_summary_prompt(question, sql_query, sql_query_results)
+            prompt = sql_summary_prompt
             print("----------SUMMARIZING SQL QUERY RESULTS------------")
             s = time.time()
             sql_summary_response = llm.invoke(sql_summary_prompt)
             et = time.time()
             print("Time taken to summarize sql results: ", et-s)
-            sql_summary_response = json.loads(sql_summary_response)
+            # sql_summary_response = json.loads(sql_summary_response)
+            sql_summary_response = format_json(sql_summary_response)            
             sql_summary = sql_summary_response['currentResponse']
             
             if(response["type"]=="other"):
@@ -863,12 +990,16 @@ def generate(question):
                     return json_response
                 et = time.time()
                 print("Time taken to get ticket status details: ", et-s)
-                resp = ticket_details+"<b>Summary</b><br> "+sql_summary
+                if(ticket_details is not None):
+                    resp = ticket_details+"<h3><b>Summary</b></h3>"+sql_summary
+                else:
+                    resp = sql_summary
         
         # Update conversation in Database
-        print("*********UPDATING IN DB*************************************")
+        print("*UPDATING IN DB*")
         try:
-            chat_id = update_db(question, response, sql_query)
+            result = update_db(question, prompt = prompt , response=resp, sql_query=sql_query)
+            chat_id = result.inserted_id
         except Exception as e:
             print("ERROR:generate: "+str(e))
             send_error_email(str(e), question)
