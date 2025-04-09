@@ -13,10 +13,11 @@ ifeedback= Blueprint('ifeedback', __name__)
 def update_db(chat_id, feedback):
     config = global_config
     connection_string = config["chat_db_url"]
+    db_name = config["chat_db_name"]
     collection_name = config["chat_collection_name"]
     resp=None
     try:
-        mongoClient = mongoDbConnection(connection_string, collection_name)
+        mongoClient = mongoDbConnection(connection_string, db_name, collection_name)
         _id = {
             "_id": ObjectId(chat_id),
         }
@@ -31,7 +32,7 @@ def update_db(chat_id, feedback):
 
 def send_error_email(error, question):
     print("*******************SENDING EMAIL**********************************")
-    sender_email = config["eip_chatbot_emailu"]
+    sender_email = config["eip_chatbot_email"]
     sender_password = config["eip_chatbot_password"]
     receiver_emails = config["receiver_emails"]
     subject = "ERROR IN EIP CHATBOT SERVICE FEEDBACK"

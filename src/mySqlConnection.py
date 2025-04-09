@@ -11,8 +11,7 @@ class mySqlConnection():
                 password=password,
                 database=db
             )
-            print("*****************************************")
-            print("Connected to MySQL DB")
+            print("**********Connected to MySQL DB**********")
             
         except Exception as e:
             print(e)
@@ -27,13 +26,11 @@ class mySqlConnection():
             # Commit the transaction if it's an INSERT, UPDATE, or DELETE query
             if query.strip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
                 self.myDb.commit()
-                print("*****************************************")
-                print("Query Executed and Changes Committed Successfully")
+                print("**********Query Executed and Changes Committed Successfully**********")
                 results = cursor.lastrowid
             else:
                 results = cursor.fetchall()
-                print("*****************************************")
-                print("Query Executed Successfully")
+                print("---Query Executed Successfully--- "+query)
             return results
         except Exception as e:
             raise Exception("mySQL:execute_query:"+str(e))

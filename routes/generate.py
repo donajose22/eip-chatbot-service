@@ -1,18 +1,22 @@
-from flask import Blueprint,request, jsonify
+from flask import Flask, Blueprint,request, jsonify, session
 from langchain_sdk.Langchain_sdk import LangChainCustom 
 from src.mySqlConnection import mySqlConnection
 from src.mongoDbConnection import mongoDbConnection
 from src.loadModel import load_model
 from src.ticketStatus import get_ticket_details
+from src.executeJql import execute_jql_query
 from src.sendEmail import send_email
 from config.config import global_config
-from src.apigee import get_access_token
+from src.apigee import get_apigee_access_token
+from string import Template
 import requests
 import json
 import time
 import datetime
 
 config = global_config
+app = Flask(__name__)
+app.secret_key = config['app_secret_key']
 
 igenerate= Blueprint('igenerate', __name__)
 
@@ -22,37 +26,15 @@ username = config["eda_ip_tracker_username"]
 password = config["eda_ip_tracker_password"]
 db = config["eda_ip_tracker_database"]
 
-conversation = [
-    {
-    "content": "Summarize everything in 100 words.",
-    "role": "system"
-  }
-]
-
-def generate_model(prompt = None):
-    client_id = global_config["genai_client_id"]
-    client_secret = global_config["genai_secret"]
-
-    # if(prompt==None):
-    #     prompt = 'Summarize everything in 100 words.'
-    # llm = LangChainCustom(client_id=client_id,
-    #                         client_secret=client_secret,
-    #                         model = "gpt-4o",
-    #                         temperature=1,
-    #                         chat_conversation=True,
-    #                         conversation_history = [],
-    #                         system_prompt=prompt)
-    llm = load_model()
-    return llm
-
 def retrieve_documents(prompt):
     config = global_config
     retriever_api_url = config["retriever_url"]
 
     headers = {
-        'Authorization': f'Bearer {get_access_token()}',
+        'Authorization': f'Bearer {get_apigee_access_token()}',
         'Content-Type': 'application/json'
         }
+    
     proxies=config["proxies"]
     body = '''{
     "prompt": "'''+prompt+'''",
@@ -80,724 +62,57 @@ def retrieve_documents(prompt):
 
     return response.json()
 
-def create_supervisor_prompt(question):
+def load_template(type, file_path='prompts/prompt_templates.json'):
+    with open(file_path, 'r') as f:
+        json_data = json.load(f)
+    return json_data[type]
 
-    prompt = """
-
-    You are an intelligent assistant that evaluates user queries to decide the best way to respond. Based on the user's question, determine if it is more appropriate to provide a direct response (inference) or to generate an SQL query that can be executed on a database.
+def load_supervisor_prompt(question):
+    supervisor_prompt_template = load_template("supervisor")
     
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. It requires an SQL query.
-    If the question only contains a string with some text characters followed by an integer value, consider that integer value as the dms id/alt id of a ticket.
-    Example: "DA11166", means the ticket alt id is 11166
-    Please analyze the following user query:
-
-    Respond with a json object in the following format. It should have 3 fields: type, response and id.
-    - type: can take three values ["inference", "status", "other"]. inference means that it requires a direct response. status/other implies that it requires the generation of an sql query to be executed on a database.
-    - response: should contain the sql query (only in case of type = "status" or "other")
-    - id: should contain the ticket id provided in the question (if there is one). Only if the type = "status", otherwise don't include this field.
-    "{
-    "type": "status",
-    "response": "Select * from Flowsteps;",
-    "id": "11166"
-    }"
+    template_string = Template(supervisor_prompt_template)
+    supervisor_prompt = template_string.substitute(question=question)
     
-    In case of  DIRECT RESPONSE
-    - If the question is related to EIP (External IP), IPs, IPX, DMS, Intel, Licensing/Access Granting, the response should be a direct response.
-    Response with the json
-    "{
-        "type": "inference"
-    }"
-    Do not add any addition text or information or quotes.
+    return supervisor_prompt
 
-    In case of SQL QUERY
-    Given an input question, create a syntactically correct MySQL query to run, then look at the results of the query and return the answer.
-    You can order the results by a relevant column to return the most interesting examples in the database.
-    Never query for all the columns from a specific table, only ask for the relevant columns given the question.
-    When asked to fetch the current details, always fetch the most recent record based on updatedAt or createdAt.
-    You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
-    DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
-    To start you should ALWAYS look at the tables in the database to see what you can query.
-    Do NOT skip this step.
-    Then you should query the schema of the most relevant tables.
-    Do not write any additional details. also the sql code should not have ``` in beginning or end and sql word in output.
-
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. Provide the status details of the ticket.
-    If the question only contains the dms id/alt id of a ticket, provide the ticket status details.
-    A ticket id provided can be either the dms id or alt id unless specified otherwise.
-    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide all the FlowSteps of the most recent revision.
+def load_query_prompt(question):
+    query_prompt_template = load_template("query")
     
-    Response type is "status", if the query is related to the status of the ticket, or the current flowstep, or if the question is about any ticket, only if the ticket dms id/alt id is provided. If the ticket dms id/alt id is provided add it in the response json. Add the generated sql query in the response field.
-    Response type is "other", otherwise. Add the generated sql query in the response field.
+    template_string = Template(query_prompt_template)
+    query_prompt = template_string.substitute(question=question)
     
-    Database Tables and Schemas
+    return query_prompt
 
-    1. Activity
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    description - Type: varchar(255), Description: Description of the activity
-    status - Type: varchar(255), Description: Status of the activity. Can take values ["created", "revised", "deleted", "rejected", "process", "completed", "approvalCompleted", "cancelled", "onHold", "pending"]
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    altId - Type: varchar(255) , Description: Alt id
-
-    2. AddDa
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    transmittalDocId - Type: datetime , Description: Transmittal Doc Id
-    altId - Type: varchar(255) , Description: Alt id
-
-    3. Comments
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    org - Type: varchar(255), Description: Organization, can take values [ "Intel", "Siemens", "Synopsys", "Cadence", "Other", "Arteris", "Ansys", "Ltts" ]
-    orgType - Type: varchar(255), Description: Organization Type, can take values - ["Internal", "External"]
-    comment - Type: longtext, Description: Comment Content
-    commentType - Type: text, Description: Comment Type. Can take values - [ "delete", "rejected", "process", "completed", "cancelled", "default", "onHold" ]
-    pushToDms - Type: tinyint(1), Description: Push to DMS. Can take values 0 and 1
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-
-    4. Completed
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    pairId - Type: int(11), Description: Pair Id, Foreign Key, Primary Key of the SupplierRecipent Table
-    documentId - Type: varchar(255) , Description: Document Id
-    createdAt - Type: datetime , Description: Created at time
-    duration - Type: int(11) , Description: Duration taken for the ticket to be completed.
-    finalFlowStep - Type: int(11) , Description: Flow step id of the Final Flow step that was completed.
-    updatedAt - Type: datetime , Description: updated at time
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-    dmsRev - Type: int(11) , Description: DMS revision
-
-    5. FlowStep
-    - Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Id
-    dmsId - Type: varchar(255), Description: DMS Ticket Id, Foreign Key
-    mappingId - Type: int(11), Description: Foreign Key, Primary Key to the FlowStepMapping Table
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    status - Type: varchar(255) , Description: Current status of the flow step. Can take values ["deleted","revised","rejected","completed","cancelled","process","notStarted"]
-    documentId - Type: varchar(255) , Description: Document Id
-    createdByEmail - Type: varchar(255) , Description: Created by email id
-    eta - Type: datetime , Description: ETA
-    onHoldEta - Type: datetime , Description: on hold ETA
-    createdBy - Type: varchar(255) , Description: created By Name
-    updatedBy - Type: varchar(255) , Description: Updated By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    recipientEmail - Type: varchar(255) , Description: Recipient email id
-    recipient - Type: varchar(255) , Description: Recipient Name
-    onHoldAt - Type: datetime , Description: On hold at time
-    startedAt - Type: datetime , Description: Started at time
-    altId - Type: varchar(255) , Description: Alt id
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    onHoldDuration - Type: int(11) , Description: On hold duration
-    dmsRev - Type: int(11) , Description: DMS revision
-    changeSummary - Type: varchar(255) , Description: Change Summary. Takes values (0 - No, 1 - Yes)
-
-    6. FlowStepMapping
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    ownerId - Type: int(11), Description: Owner Id, Foreign Key, Primary Key of the FlowStepOwner Table
-    pairId - Type: int(11), Description: Pair Id, Foreign Key, Primary Key of the SupplierRecipent Table
-    stepNo - Type: int(11), Description: Step No in the entire flow
-    description - Type: varchar(255), Description: Description of the Flow step
-    header - Type: varchar(255), Description: Header of the Flow Step
-    dependency - Type: int(11), Description: Dependency on other Flow Step Numbers. -1 indicates no dependency.
-    hasDocument - Type: tinyint(1), Description: Has Document. Takes values (0 - No, 1 - Yes)
-    version - Type: int(11), Description: Version
-    eta - Type: int(11), Description: ETA
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    changeSummary - Type: tinyint(1), Description: Change Summary. Takes values (0 - No, 1 - Yes)
-    canSendReminderEmails - Type: tinyint(1), Description: Can send reminder emails. Takes values (0 - No, 1 - Yes)
-    docuSign - Type: tinyint(1), Description: Uses DocuSign. Takes values (0 - No, 1 - Yes)
-
-    7. FlowStepOwner
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    owner - Type: varchar(255), Description: Owner Organization
-    members - Type: longtext, Description: Members
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    intelSigner - Type: longtext, Description: Intel Signers
-    signer - Type: longtext, Description: Signers
-    intelMembers - Type: longtext, Description: Intel members
-    stepZeroApprovers - Type: longtex, Description: step zero approvers
-
-    8. Rejected
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    dmsId - Type: varchar(255), Description: DMS Ticket Id, Foreign Key
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    status - Type: varchar(255) , Description: Current status. Can take values ["renewed","notApplicable","rejected"]
-    renewedAt - Type: datetime, Description: renewed at time 
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-
-    9. SupplierRecipent
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, SupplierRecipent pair Id
-    supplier - Type: varchar(255), Description: Supplier Name
-    recipient - Type: varchar(255), Description: Recipient Name
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-
-    Do not access any other tables.
+def load_inference_prompt(question, documents):
+    inference_prompt_template = load_template("inference")
+    template_string = Template(inference_prompt_template)
+    inference_prompt = template_string.substitute(question=question, document1=documents[0]['Result:'], source1=documents[0]['Source'], document2=documents[1]['Result:'], source2=documents[1]['Source'], document3=documents[2]['Result:'], source3=documents[2]['Source'])
     
-    Based on the given information, refer to the inputs given below, generate the response in an appropriate format.
+    return inference_prompt
+
+def load_summary_prompt(question, query, query_results):
+    summary_prompt_template = load_template("summary")
     
+    template_string = Template(summary_prompt_template)
+    summary_prompt = template_string.substitute(question=question, query=query, query_results=query_results)
     
-    
-    EXAMPLES
-    \n
-    Example 1 - How many entries are present in FlowStep?, 
-        the response will be something like this 
-        "{"response": "SELECT COUNT(*) FROM FlowStep ;",
-            "type": "other"}"
-    \n
-    Example 2 - What all tickets are in complete status?, 
-        the response will be something like this 
-        "{"response": "SELECT * FROM FlowStep WHERE status='completed' ; ",
-            "type": "other"}"
-        
-    \n
-    Example 3 - How many flow steps where the recipient is Cadence, 
-        the response will be something like this 
-        "{"response": "SELECT * FROM FlowStep WHERE recipient='Cadence' ; ",
-            "type": "other"}"
-        
-    \n
-    Example 4 - Status of active flowstep of ticket 15016930033, 
-        the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStep fs
-            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
-            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
-            INNER JOIN (
-                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-                FROM FlowStep fs
-                INNER JOIN (
-                    SELECT supplier, recipient, MAX(rev) AS maxRev
-                    FROM FlowStep
-                    WHERE dmsId = '15016930033' OR altId = '15016930033'
-                    GROUP BY supplier, recipient
-                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
-                WHERE fs.dmsId = '15016930033' OR fs.altId = '15016930033'
-                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
-            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
-            WHERE fs.dmsId = '15016930033' OR fs.altId = '15016930033';",
-            "type": "status",
-            "id": "14017507755"}"
-    \n
-    Example 5 - 14017507755, 
-        the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStep fs
-            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
-            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
-            INNER JOIN (
-                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-                FROM FlowStep fs
-                INNER JOIN (
-                    SELECT supplier, recipient, MAX(rev) AS maxRev
-                    FROM FlowStep
-                    WHERE dmsId = '14017507755' OR altId = '14017507755'
-                    GROUP BY supplier, recipient
-                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
-                WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755'
-                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
-            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
-            WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755';",
-            "type": "status",
-            "id": "14017507755"}"
-            
-    Example 6 -  How to get IP from IPX?
-        the response will be something like this
-        "{
-            "type": "inference"
-        }"
-    \n
-    Example 7 - DA14017507755, 
-        the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStep fs
-            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
-            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
-            INNER JOIN (
-                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-                FROM FlowStep fs
-                INNER JOIN (
-                    SELECT supplier, recipient, MAX(rev) AS maxRev
-                    FROM FlowStep
-                    WHERE dmsId = '14017507755' OR altId = '14017507755'
-                    GROUP BY supplier, recipient
-                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
-                WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755'
-                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
-            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
-            WHERE fs.dmsId = '14017507755' OR fs.altId = '14017507755';",
-            "type": "status",
-            "id": "14017507755"}"
-    \n
-    Example 8 - DA14017, 
-        the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStep fs
-            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
-            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
-            INNER JOIN (
-                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-                FROM FlowStep fs
-                INNER JOIN (
-                    SELECT supplier, recipient, MAX(rev) AS maxRev
-                    FROM FlowStep
-                    WHERE dmsId = '14017' OR altId = '14017'
-                    GROUP BY supplier, recipient
-                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
-                WHERE fs.dmsId = '14017' OR fs.altId = '14017'
-                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
-            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
-            WHERE fs.dmsId = '14017' OR fs.altId = '14017';",
-            "type": "status",
-            "id": "14017"}"
-    \n
-    Example 9 - 14017, 
-        the response will be something like this 
-        "{"response": "SELECT fs.id, fs.dmsId, fs.altId, fs.mappingId, fsm.description, fsm.header, fso.owner, fs.supplier, fs.recipient, fs.rev, fs.pass, fs.status, fs.eta, fs.updatedAt
-            FROM FlowStep fs
-            INNER JOIN FlowStepMapping fsm ON fsm.id = fs.mappingId
-            INNER JOIN FlowStepOwner fso ON fso.id = fsm.ownerId
-            INNER JOIN (
-                SELECT fs.supplier, fs.recipient, subq1.maxRev, MAX(fs.pass) as maxPass, MAX(fs.startedAt) as maxStart
-                FROM FlowStep fs
-                INNER JOIN (
-                    SELECT supplier, recipient, MAX(rev) AS maxRev
-                    FROM FlowStep
-                    WHERE dmsId = '14017' OR altId = '14017'
-                    GROUP BY supplier, recipient
-                ) subq1 ON fs.supplier = subq1.supplier AND fs.recipient = subq1.recipient AND fs.rev = subq1.maxRev
-                WHERE fs.dmsId = '14017' OR fs.altId = '14017'
-                GROUP BY fs.supplier, fs.recipient, subq1.maxRev
-            ) subq2 ON fs.supplier = subq2.supplier AND fs.recipient = subq2.recipient AND fs.rev = subq2.maxRev AND fs.pass = subq2.maxPass
-            WHERE fs.dmsId = '14017' OR fs.altId = '14017';",
-            "type": "status",
-            "id": "14017"}"
+    return summary_prompt
 
-            
-    Please provide your response in the form of a valid JSON string. 
-    Ensure that the JSON is properly formatted, including necessary quotes around keys and string values, proper escaping of special characters if any, and valid data types (e.g., strings, numbers, booleans, arrays, and objects). 
-    Your output should not contain any extra text outside the JSON string to avoid errors during parsing.
-    
-    QUESTION: 
-    """+question+"""
-    """
-    return prompt
-
-def create_inference_prompt(question, documents):
-
-    prompt = '''Using the information from the provided relevant documents, please answer the following query. 
-    Make sure to reference the sources in your response. Provide the links when citing the sources. 
-    If you think the provided documents are not relevant to the query, refer to the conversation history to answer the query.
-    If you don't know the answer, just say that you don't know, don't try to make up an answer. 
-
-    Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
-    
-
-
-    Instructions for generating response in html format.
-
-    Do not modify any of the content. Only add the appropriate HTML tags wherever necessary.
-
-    Do not include any <html> or <body> tags. The output should contain only the content and relevant HTML tags within the body of the page.
-
-    If there are any SQL Queries in the text, it should be highlighted and emphasized.
-
-    Paragraphs: Each paragraph should be separated by the <p></p> tags.
-
-    Unordered Lists: Items in an unordered list should be denoted using the <ul> and <li> tags. Use - to mark list items in the original text and convert them to HTML list items.
-
-    Ordered Lists: Items in an ordered list should be denoted using the <ol> and <li> tags. Convert numbered points in the text to an ordered list.
-
-    Bold Important Words: Some words that are important or emphasized (such as terms, names, or concepts) should be enclosed in the <b></b> tags. You can infer the importance based on context. 
-    Only highlight the important words once in the beginning. Emphasize at most 2 words/phrases in a sentence. Emphasize the main words that answer the question.
-
-    Line Breaks: Use <br> where necessary for line breaks (i.e., where a paragraph should continue on a new line but does not require a full paragraph break).
-
-    Images: If the text contains image URLs, use the <img> tag to insert the image with the src attribute. Ensure the image source URL is inserted properly, for example:
-    <img src="URL_HERE" alt="Description of the image">
-
-    Links: For any webpage URLs or references to external sources, use the <a> tag to create clickable links. The link should point to the source, and the anchor text should describe the content or provide context. The links should open in a new tab. For example:
-    <a href="URL_HERE">Link Description</a>
-
-    Headings: If the text contains headings or subheadings, use the appropriate heading tags (<h1>, <h2>, etc.) based on the hierarchy of the text. For example, major headings should use <h1>, subheadings should use <h2>, and so on.
-
-    Additional Formatting: If there are any other formatting elements (such as italics, bold, etc.), make sure to convert them properly into HTML tags (<i></i> for italics, <b></b> for bold, etc.).
-
-    Example Input:
-
-    "Here is a sample paragraph. It's followed by a list of items:
-
-    - Item one
-    - Item two
-    - Item three
-
-    Also, visit this page for more information: www.example.com
-
-    Here's an important image:
-    http://example.com/sample-image.jpg"
-
-    Expected HTML Output:
-
-    "<p>Here is a sample paragraph. It's followed by a list of items:</p>
-
-    <ul>
-    <li>Item one</li>
-    <li>Item two</li>
-    <li>Item three</li>
-    </ul>
-
-    <p>Also, visit this page for more information: <a href="http://www.example.com">www.example.com</a></p>
-
-    <p>Here's an important image:</p>
-    <img src="http://example.com/sample-image.jpg" alt="Sample Image">"
-
-
-    Do not include the <html> or <body> tags in the output. 
-    Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
-    Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
-    Do not truncate the response. Make sure all the information needed is present in the response.
-    
-    Query : '''+question+'''
-
-    Relevant Documents and Sources:
-
-    Document : '''+documents[0]['Result:']+''' 
-    \nSource: ''' + documents[0]['Source'] +'''
-
-    \nDocument : '''+documents[1]['Result:']+''' 
-    \nSource : ''' + documents[1]['Source'] +'''
-
-    \nDocument : '''+documents[2]['Result:']+''' 
-    \nSource : ''' + documents[2]['Source'] +'''
-
-    '''
-    return prompt
-
-def create_sql_summary_prompt(question, sql_query, sql_query_results):
-    response_prompt = f"""
-    You are an agent designed to interact with a SQL query results.
-    Instructions for SQL Query Result Interaction
-
-    Given an input question, and the sql database query results for that question, generate a summary of the query results to answer the question.
-    You have been provided with the database tables and schema details for your reference.
-    Do not mention about the provided sql query results in the response.
-
-    If the question only contains a an integer value, it is implied that it is dms id/alt id of a ticket. The alt id usually has 4-5 digits while the dms id usually has 11 digits. Provide the status details of the ticket.
-    If the question only contains a string with some text characters followed by an integer value, consider that integer value as the dms id/alt id of a ticket.
-    Example: "DA11166", means the ticket alt id is 11166
-    
-    When asked to fetch the status of a ticket, for each unique supplier recipient pair of the ticket, provide a summary the details of the latest FlowStep of the most recent revision and pass.
-    The ticket is only completed if all of the steps are completed. Only give the details of the latest FlowStep that is either in process or pending state. Do not give details of the notStarted FlowSteps.
-    Do not include any addidional flowsteps.
-    In the summary, include the ticket id, current Flowstep header, eta for the FlowStep and the Action Required for the ETA.
-    The Action is Required by the owner provided in the sql results.
-    In case the ticket has two different supplier recipient pairs, give the summary for both suppliers and specify the supplier name.
-    Find the details from the SQL Query Results by looking at the SQL Query.
-    If the status is "process", display it as "in process".
-    Do not put in any repetitive information. Do not add any additional details than what are mentioned in the examples.
-    Generate the response in proper html format according to the instructions given below. Refer to the examples provided.
-
-    \n
-    Database Tables and Schemas
-
-    1. Activity
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    description - Type: varchar(255), Description: Description of the activity
-    status - Type: varchar(255), Description: Status of the activity. Can take values ["created", "revised", "deleted", "rejected", "process", "completed", "approvalCompleted", "cancelled", "onHold", "pending"]
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    altId - Type: varchar(255) , Description: Alt id
-
-    2. AddDa
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    transmittalDocId - Type: datetime , Description: Transmittal Doc Id
-    altId - Type: varchar(255) , Description: Alt id
-
-    3. Comments
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    org - Type: varchar(255), Description: Organization, can take values [ "Intel", "Siemens", "Synopsys", "Cadence", "Other", "Arteris", "Ansys", "Ltts" ]
-    orgType - Type: varchar(255), Description: Organization Type, can take values - ["Internal", "External"]
-    comment - Type: longtext, Description: Comment Content
-    commentType - Type: text, Description: Comment Type. Can take values - [ "delete", "rejected", "process", "completed", "cancelled", "default", "onHold" ]
-    pushToDms - Type: tinyint(1), Description: Push to DMS. Can take values 0 and 1
-    createdBy - Type: varchar(255) , Description: created By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-
-    4. Completed
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Activity Id 
-    dmsId - Type: varchar(255), Description: DMS Ticket Id
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    pairId - Type: int(11), Description: Pair Id, Foreign Key, Primary Key of the SupplierRecipent Table
-    documentId - Type: varchar(255) , Description: Document Id
-    createdAt - Type: datetime , Description: Created at time
-    duration - Type: int(11) , Description: Duration taken for the ticket to be completed.
-    finalFlowStep - Type: int(11) , Description: Flow step id of the Final Flow step that was completed.
-    updatedAt - Type: datetime , Description: updated at time
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-    dmsRev - Type: int(11) , Description: DMS revision
-
-    5. FlowStep
-    - Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Id
-    dmsId - Type: varchar(255), Description: DMS Ticket Id, Foreign Key
-    mappingId - Type: int(11), Description: Foreign Key, Primary Key to the FlowStepMapping Table
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    status - Type: varchar(255) , Description: Current status of the flow step. Can take values ["deleted","revised","rejected","completed","cancelled","process","notStarted"]
-    documentId - Type: varchar(255) , Description: Document Id
-    createdByEmail - Type: varchar(255) , Description: Created by email id
-    eta - Type: datetime , Description: ETA
-    onHoldEta - Type: datetime , Description: on hold ETA
-    createdBy - Type: varchar(255) , Description: created By Name
-    updatedBy - Type: varchar(255) , Description: Updated By Name
-    createdAt - Type: datetime , Description: Created at time
-    updatedAt - Type: datetime , Description: updated at time
-    deletedAt - Type: datetime , Description: deleted at time
-    recipientEmail - Type: varchar(255) , Description: Recipient email id
-    recipient - Type: varchar(255) , Description: Recipient Name
-    onHoldAt - Type: datetime , Description: On hold at time
-    startedAt - Type: datetime , Description: Started at time
-    altId - Type: varchar(255) , Description: Alt id
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    onHoldDuration - Type: int(11) , Description: On hold duration
-    dmsRev - Type: int(11) , Description: DMS revision
-    changeSummary - Type: varchar(255) , Description: Change Summary. Takes values (0 - No, 1 - Yes)
-
-    6. FlowStepMapping
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    ownerId - Type: int(11), Description: Owner Id, Foreign Key, Primary Key of the FlowStepOwner Table
-    pairId - Type: int(11), Description: Pair Id, Foreign Key, Primary Key of the SupplierRecipent Table
-    stepNo - Type: int(11), Description: Step No in the entire flow
-    description - Type: varchar(255), Description: Description of the Flow step
-    header - Type: varchar(255), Description: Header of the Flow Step
-    dependency - Type: int(11), Description: Dependency on other Flow Step Numbers. -1 indicates no dependency.
-    hasDocument - Type: tinyint(1), Description: Has Document. Takes values (0 - No, 1 - Yes)
-    version - Type: int(11), Description: Version
-    eta - Type: int(11), Description: ETA
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    changeSummary - Type: tinyint(1), Description: Change Summary. Takes values (0 - No, 1 - Yes)
-    canSendReminderEmails - Type: tinyint(1), Description: Can send reminder emails. Takes values (0 - No, 1 - Yes)
-    docuSign - Type: tinyint(1), Description: Uses DocuSign. Takes values (0 - No, 1 - Yes)
-
-    7. FlowStepOwner
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    owner - Type: varchar(255), Description: Owner Organization
-    members - Type: longtext, Description: Members
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    intelSigner - Type: longtext, Description: Intel Signers
-    signer - Type: longtext, Description: Signers
-    intelMembers - Type: longtext, Description: Intel members
-    stepZeroApprovers - Type: longtex, Description: step zero approvers
-
-    8. Rejected
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, Flow Step Mapping Id
-    dmsId - Type: varchar(255), Description: DMS Ticket Id, Foreign Key
-    rev - Type: int(11), Description: Revision Number
-    pass - Type: int(11), Description: Current pass number
-    flowStepId - Type: int(11), Description: Flow Step Id, Foreign Key, Primary Key to the FlowStep Table
-    status - Type: varchar(255) , Description: Current status. Can take values ["renewed","notApplicable","rejected"]
-    renewedAt - Type: datetime, Description: renewed at time 
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    supplier - Type: varchar(255) , Description: Supplier Name. Can take values ["Siemens", "Synopsys", "Cadence"]
-    recipient - Type: varchar(255) , Description: Recipient Name
-
-    9. SupplierRecipent
-    Columns:
-    id - Type: int(11), Description: Automatic Increment, Primary Key, SupplierRecipent pair Id
-    supplier - Type: varchar(255), Description: Supplier Name
-    recipient - Type: varchar(255), Description: Recipient Name
-    createdBy - Type: varchar(255), Description: created By Name
-    updatedBy - Type: varchar(255), Description: updated By Name
-    createdAt - Type: datetime, Description: created at time
-    updatedAt - Type: datetime, Description: updated at time
-    deletedAt - Type: datetime, Description: deleted at time
-    
-    Example Input: 12345
-    
-    Expected Summary:
-    "Ticket 12345 FlowStep "Cadence Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Cadence"
-    
-    Example Input: 54321
-    
-    Expected Summary:
-    "For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Cadence
-    
-    For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Siemens"
-    
-    Example Input: 23456
-    
-    Expected Summary:
-    "For Supplier Cadence, Ticket 23456 FlowStep "Step Zerp" is currently in process, with an ETA of 2025-01-09 9:55:18. Last updated on 2025-01-07.
-    
-    For Supplier Siemens, Ticket 23456 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-09 9:55:18. Last updated on 2025-01-08.
-    Action Required By: Siemens"
-
-
-    Instructions for generating response in html format.
-
-    Do not modify any of the content. Only add the appropriate HTML tags wherever necessary.
-
-    Do not include any <html> or <body> tags. The output should contain only the content and relevant HTML tags within the body of the page.
-
-    If there are any SQL Queries in the text, it should be highlighted and emphasized.
-
-    Paragraphs: Each paragraph should be separated by the <p></p> tags.
-
-    Unordered Lists: Items in an unordered list should be denoted using the <ul> and <li> tags. Use - to mark list items in the original text and convert them to HTML list items.
-
-    Ordered Lists: Items in an ordered list should be denoted using the <ol> and <li> tags. Convert numbered points in the text to an ordered list.
-
-    Bold Important Words: Some words that are important or emphasized (such as terms, names, or concepts) should be enclosed in the <b></b> tags. You can infer the importance based on context. 
-    Only highlight the important words once in the beginning. Emphasize at most 2 words/phrases in a sentence. Emphasize the main words that answer the question.
-
-    Line Breaks: Use <br> where necessary for line breaks (i.e., where a paragraph should continue on a new line but does not require a full paragraph break).
-
-    Images: If the text contains image URLs, use the <img> tag to insert the image with the src attribute. Ensure the image source URL is inserted properly, for example:
-    <img src="URL_HERE" alt="Description of the image">
-
-    Links: For any webpage URLs or references to external sources, use the <a> tag to create clickable links. The link should point to the source, and the anchor text should describe the content or provide context. The links should open in a new tab. For example:
-    <a href="URL_HERE">Link Description</a>
-
-    Headings: If the text contains headings or subheadings, use the appropriate heading tags (<h1>, <h2>, etc.) based on the hierarchy of the text. For example, major headings should use <h1>, subheadings should use <h2>, and so on.
-
-    Additional Formatting: If there are any other formatting elements (such as italics, bold, etc.), make sure to convert them properly into HTML tags (<i></i> for italics, <b></b> for bold, etc.).
-
-    Example Input:
-    "Ticket 12345 FlowStep "Cadence Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Cadence"
-
-    Expected HTML Output:
-
-    "<p>Ticket 12345 "Cadence Approves DMAA" FlowStep is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
-    <b>Action Required By: Cadence</b></p>"
-    
-    Example Input: 
-    "For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Cadence
-    
-    For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.
-    Action Required By: Siemens"
-    
-    Expected HTML Output:
-    "<p>For Supplier Synopsys, Ticket 54321 FlowStep "Cadence Approves IPCTD" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
-    <b>Action Required By: Cadence</b></p>
-    
-    <p>For Supplier Siemens, Ticket 54321 FlowStep "Siemens Approves DMAA" is currently in process, with an ETA of 2025-01-08 11:55:18. Last updated on 2025-01-06.<br/>
-    <b>Action Required By: Siemens</b></p>"
-
-
-    Do not include the <html> or <body> tags in the output. 
-    Only highlight the main words/phrases that answer the question. Do not highlight/bold any unnecessary words.
-    Do not include any additional text or quotes in the beginning or end of the response. No quotes or backticks.
-    Do not truncate the response. Make sure all the information needed is present in the response.
-    
-    
-    Input Question: {question}
-
-    SQL Query: {sql_query}
-
-    SQL Query Results: {sql_query_results}
-
-    """
-
-    return response_prompt
-
-def update_db(question, prompt=None, response=None, sql_query=None, feedback=None, error=None):
+def update_db(question, prompt=None, response=None, query=None, feedback=None, error=None):
     config = global_config
     connection_string = config["chat_db_url"]
+    db_name = config["chat_db_name"]
     collection_name = config["chat_collection_name"]
     resp=None
     try:
-        mongoClient = mongoDbConnection(connection_string, collection_name)
+        mongoClient = mongoDbConnection(connection_string, db_name, collection_name)
         record = {
             "user_wwid": "",
             "username": "",
             "query": question,
             "prompt": prompt,
             "response": response,
-            "sql_query": sql_query,
+            "query": query,
             "error": error,
             "feedback": feedback, 
             "time": datetime.datetime.now()
@@ -824,12 +139,13 @@ def format_json(text):
         raise e
 
 def validate_json(json_string):
+    # Checking if the supervisor response is a valid json as per the given instructions.
     try:
         # Attempt to load the JSON string
         data = json.loads(json_string)
     except json.JSONDecodeError as e:
         print(f"Invalid JSON: {e}")
-        return False
+        return False, f"Invalid JSON: {e}"
 
     # Check for required fields
     print("checking required fields")
@@ -837,20 +153,23 @@ def validate_json(json_string):
     for field in required_fields:
         if field not in data:
             print(f"Missing required field: {field}")
-            return False
+            return False, f"Missing required field: {field}"
     
     # Check for 'response' and 'id' field if 'type' is 'status' or 'other
     if data['type'] == 'other' and 'response' not in data:
         print("Missing required field: response (for type 'other')")
-        return False
+        return False, "Missing required field: response (for type 'other')"
     if data['type'] == 'status' and 'response' not in data:
         print("Missing required field: response (for type 'status')")
-        return False
+        return False, "Missing required field: response (for type 'status')"
     if data['type'] == 'status' and 'id' not in data:
         print("Missing required field: id (for type 'status')")
-        return False
+        return False, "Missing required field: id (for type 'status')"
+    if data['type'] == 'jql' and 'response' not in data:
+        print("Missing required field: response (for type 'jql')")
+        return False, "Missing required field: response (for type 'jql')"
     print("JSON is valid and contains all required fields.")
-    return True
+    return True, ""
 
 def send_error_email(error, question):
     print("SENDING EMAIL")
@@ -862,32 +181,31 @@ def send_error_email(error, question):
     send_email(sender_email, sender_password, receiver_emails, subject, body)
 
 @igenerate.route("/generate/<question>",methods=["GET"])
-def generate(question):
-    
+def generate(question):    
     global conversation
-    sql_query = None
-    is_sql_query = 0
-
+    
     json_response = {
         "id": None,
         "response": "Something went wrong while processing your request. Please try again later.",
-        "is_sql_query": 0,
-        "sql_query": None,
+        "is_query": 0,
+        "query": None,
         "time_taken": None,
     }
     prompt=None
     resp=None
-    sql_query=None
+    is_query = 0
+    query=None
     error=None
 
     print("Question: ",question)
     
     try:
-        llm = generate_model()
+        llm = load_model()
+        
         start_time = time.time()
-        # create prompt
-        supervisor_prompt = create_supervisor_prompt(question)
-        print("created prompt")
+        # create prompt 
+        supervisor_prompt = load_supervisor_prompt(question)
+        print("loaded supervisor prompt")
         print('-------------INVOKING SUPERVISOR MODEL----------------')
         s = time.time()
         response=llm.invoke(supervisor_prompt)
@@ -896,21 +214,9 @@ def generate(question):
         print("--------------RECEIVED RESPONSE---------------")
         
         response = format_json(response)
-        
-        # print(response)
-        # try:
-        #     check = json.loads(response)
-        # except Exception as e:
-        #     print("json.loads error")
-        #     send_error_email(str(e), question)
-        #     update_db(question, prompt=supervisor_prompt, response=response, error=str(e))
-        #     return json_response
-
-        # response = json.loads(response)
-        # # print(response)
-        
+        print(response['currentResponse'])        
         try:
-            valid_json=validate_json(response['currentResponse'])
+            valid_json, message=validate_json(response['currentResponse'])
         except Exception as e:
             print("ERROR:generate:validate_json: "+str(e))
             send_error_email(str(e), question)
@@ -919,11 +225,13 @@ def generate(question):
         
         if(valid_json==False):
             print("ERROR:generate::Incorrect/Invalid JSON response")
-            send_error_email("ERROR:generate::Incorrect/Invalid JSON response", question)
-            update_db(question, prompt=supervisor_prompt, response=response, error=str(e))
+            send_error_email("ERROR:generate::Incorrect/Invalid JSON response:"+message, question)
+            update_db(question, prompt=supervisor_prompt, response=response, error="ERROR:generate::Incorrect/Invalid JSON response")
             return json_response
         
-        response = json.loads(response['currentResponse'])
+        response = json.loads(response['currentResponse'])        
+        print("SUPERVISOR RESPONSE: "+str(response))
+        
         if(response["type"]=="inference"):
             try: 
                 # retrieve relevant wiki documents
@@ -932,6 +240,7 @@ def generate(question):
                 documents = retrieve_documents(question)
                 et = time.time()
                 print("time taken for retrieving: ", et-s)
+                print("RETRIEVED DOCUMENTS: "+str(documents))
             except Exception as e:
                 print("ERROR:generate:retreiving wiki documents: "+str(e))
                 send_error_email(str(e), question)
@@ -940,7 +249,8 @@ def generate(question):
 
             print("------SUMMARIZING RETRIEVED DOCUMENTS------------")
             s = time.time()
-            prompt = create_inference_prompt(question, documents['top_k_results']['response'])
+            prompt = load_inference_prompt(question, documents['top_k_results']['response'])
+            print("SUMMARIZE PROMPT CREATED")
             inference_response = llm.invoke(prompt)
             et = time.time()
             print("Time taken for inference: ", et-s)
@@ -948,23 +258,88 @@ def generate(question):
             # inference_response = json.loads(inference_response)
             inference_response = format_json(inference_response)
             resp = inference_response['currentResponse']
-        
-        else:
-            is_sql_query = 1
-            sql_query = response["response"]
+        elif(response["type"] =="jql"): # if question is regarding JIRA
+            is_query = 1
+            query = response["response"]
+            
             # Execute the sql query
             try:
+                print("--------------EXECUTING THE QUERY--------------")
+                s = time.time()
+                result_status, query_results = execute_jql_query(query)
+                et = time.time()
+                print("Time taken to execute sql query: ", et-s)
+            except Exception as e:
+                print("ERROR:generate:jql: "+str(e))
+                send_error_email(str(e), question)
+                return json_response
+
+            if(result_status == 200):
+                issues = []
+                query_result_issues = query_results['issues']
+                for result_issue in query_result_issues:
+                    issue = {}
+                    issue['expand'] = result_issue['expand']
+                    issue['id'] = result_issue['id']
+                    issue['self'] = result_issue['self']
+                    issue['key'] = result_issue['key']
+                    issue['fields'] = {}
+                    for key in result_issue['fields'].keys():
+                        if(result_issue['fields'][key] is not None):
+                            # print(result_issue[key], type(result_issue[key]))
+                            issue['fields'][key] = result_issue['fields'][key]
+                    issues.append(issue)
+                query_results['issues'] = issues
+            else:
+                is_query = 0
+                print(query_results)
+            
+            # setting the limit for query results. Query results are being limited to 18500 words.
+            query_results = str(query_results)
+            word_limit = 18500  # the entire prompt should not go beyond 20000 words
+            if(len(query_results.split(" ")) > 18500):
+                query_results_size = len(query_results.split(" "))
+                print(f'Size of query results: {query_results_size} words')
+                query_results = ' '.join(query_results.split(" ")[:word_limit])
+                query_results_size = len(query_results.split(" "))
+                print(f'Size of query results after reduction: {query_results_size} words')
+                
+            # create summary prompt 
+            summary_prompt = load_summary_prompt(question, query, query_results)
+            print("loaded summary prompt")
+            summary_prompt_size = len(summary_prompt.split(" "))
+            print(f'Size of summary prompt: {summary_prompt_size} words')
+            print('-------------INVOKING SUMMARY MODEL----------------')
+            s = time.time()
+            response=llm.invoke(summary_prompt)
+            et = time.time()
+            print("Time taken by summary generator: ", et-s)
+            print("--------------RECEIVED RESPONSE---------------")
+            response = format_json(response)
+            if('currentResponse' in response.keys()):
+                resp = response['currentResponse'] 
+            else:
+                print(response)
+                if('StatusCode' in response.keys() and response['StatusCode']==400):
+                    raise Exception(response['Message']) 
+        else: # if question is regarding sql database
+            is_query = 1
+            query = response["response"]
+            # Execute the sql query
+            try:
+                print("--------------EXECUTING THE QUERY--------------")
+                s = time.time()
                 mySql = mySqlConnection(host, port, username, password, db)
-                sql_query_results = mySql.execute_query(sql_query)
-                # query_results = execute_sql_query(sql_query)   # execute sql query
+                query_results = mySql.execute_query(query)
+                et = time.time()
+                print("Time taken to execute sql query: ", et-s)
             except Exception as e:
                 print("ERROR:generate:mySQL: "+str(e))
                 send_error_email(str(e), question)
                 update_db(question, error=str(e))
                 return json_response
             
-            sql_summary_prompt = create_sql_summary_prompt(question, sql_query, sql_query_results)
-            prompt = sql_summary_prompt
+            sql_summary_prompt = load_summary_prompt(question, query, query_results)
             print("----------SUMMARIZING SQL QUERY RESULTS------------")
             s = time.time()
             sql_summary_response = llm.invoke(sql_summary_prompt)
@@ -996,9 +371,9 @@ def generate(question):
                     resp = sql_summary
         
         # Update conversation in Database
-        print("*UPDATING IN DB*")
+        print("---------UPDATING IN DB---------")
         try:
-            result = update_db(question, prompt = prompt , response=resp, sql_query=sql_query)
+            result = update_db(question, prompt = prompt , response=resp, query=query)
             chat_id = result.inserted_id
         except Exception as e:
             print("ERROR:generate: "+str(e))
@@ -1009,12 +384,10 @@ def generate(question):
         execution_time = end_time - start_time
         print("EXECUTION TIME: ", execution_time)
         
-        # resp += "<br>Time taken to generate response: "+"{:.1f}".format(execution_time)+" s <br>We are continuously working on improving our response time to enhance your experience. Thank you for your patience and understanding."
-
         json_response["id"]=str(chat_id)
         json_response["response"]=resp
-        json_response["is_sql_query"]=is_sql_query
-        json_response["sql_query"]=sql_query
+        json_response["is_query"]=is_query
+        json_response["query"]=query
         json_response["time_taken"]="{:.1f}".format(execution_time)
         
         return json_response

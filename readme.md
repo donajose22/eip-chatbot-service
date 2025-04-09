@@ -1,3 +1,5 @@
+- pip install --proxy http://proxy-dmz.intel.com:912 -r requirements.txt
+
 
 - docker login amr-registry-pre.caas.intel.com/eip-chatbot
 - docker build . -t eip-chatbot
