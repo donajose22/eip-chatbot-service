@@ -1,9 +1,10 @@
-FROM python:3.12
+FROM python
 
 ADD requirements.txt requirements.txt
 RUN python -m pip install --upgrade pip
 RUN pip install --proxy http://proxy-dmz.intel.com:912 -r requirements.txt
-ADD .venv/Lib/site-packages/langchain_sdk langchain_sdk
+ADD langchain_sdk langchain_sdk
+# ADD .venv/Lib/site-packages/langchain_sdk langchain_sdk
 # RUN pip install --proxy http://proxy-dmz.intel.com:912 https://af01p-fm.devtools.intel.com/artifactory/igpt_forge_gaas_python_sdk-fm-local/api/storage/langchain_sdk-0.1.2/0.1.2/langchain_sdk-0.1.2-py3-none-any.whl
 
 ADD main.py main.py
