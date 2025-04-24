@@ -1,3 +1,4 @@
+from src.logger import Logger
 from mysql.connector import connect
 from src.mySqlConnection import mySqlConnection
 from config.config import global_config
@@ -32,7 +33,7 @@ def create_flowsteps_query(ticket_id, supplier, recipient):
 
 def get_ticket_details(ticket_id):
 
-    print("**************************GETTING TICKET STATUS********************************************")
+    Logger().getLogger().info("**************************GETTING TICKET STATUS********************************************")
 
     try:
         mySql = mySqlConnection(host, port, username, password, db)
@@ -58,7 +59,7 @@ def get_ticket_details(ticket_id):
         query_results = mySql.execute_query(ticket_status_query)
 
     except Exception as e:
-        print("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
+        Logger().getLogger().error("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
 
     if(query_results == []): 
         return None
@@ -100,7 +101,7 @@ def get_ticket_details(ticket_id):
         try:
             flowsteps_results = mySql.execute_query(flowsteps_query)
         except Exception as e:
-            print("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
+            Logger().getLogger().error("ERROR:ticketStatus:get_ticket_details:MySQL: "+str(e))
             raise e
         
         if(flowsteps_results == []):

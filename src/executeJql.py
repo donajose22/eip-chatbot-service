@@ -1,3 +1,4 @@
+from src.logger import Logger
 import requests
 import urllib3
 import json
@@ -8,7 +9,7 @@ from config.config import global_config
 config = global_config
 
 def execute_jql_query(query):
-    print("Inside execut_jql_query function")
+    Logger().getLogger().info("Inside execut_jql_query function")
     # Create a custom SSL context
     ssl_context = urllib3.util.ssl_.create_urllib3_context()
     ssl_context.set_ciphers('TLSv1.2')
@@ -33,7 +34,8 @@ def execute_jql_query(query):
         verify=False
     )
     
-    print(response.status_code)
+    Logger().getLogger().info(response.status_code)
+    Logger().getLogger().info(response.content)
     if(response.status_code == 200 or response.status_code == 400):
         query_results = json.loads(response.text)
         return response.status_code, query_results

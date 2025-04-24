@@ -1,3 +1,4 @@
+from src.logger import Logger
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -18,11 +19,11 @@ def send_email(sender_email, sender_password, receiver_emails, subject, body):
         msg['To'] = ', '.join(receiver_emails)
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        print("Created the mail")
+        Logger().getLogger().info("Created the mail")
 
         # Send the email
         server.sendmail(sender_email, receiver_emails, msg.as_string())
         server.quit()
-        print("Email sent successfully")
+        Logger().getLogger().info("Email sent successfully")
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        Logger().getLogger().error(f"Failed to send email: {e}")

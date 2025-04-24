@@ -1,3 +1,4 @@
+from src.logger import Logger
 from mysql.connector import connect
 
 class mySqlConnection():
@@ -11,10 +12,10 @@ class mySqlConnection():
                 password=password,
                 database=db
             )
-            print("**********Connected to MySQL DB**********")
+            Logger().getLogger().info("**********Connected to MySQL DB**********")
             
         except Exception as e:
-            print(e)
+            Logger().getLogger().error(e)
             if self.myDb is not None:
                 self.myDb.close()
 
@@ -26,11 +27,12 @@ class mySqlConnection():
             # Commit the transaction if it's an INSERT, UPDATE, or DELETE query
             if query.strip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
                 self.myDb.commit()
-                print("**********Query Executed and Changes Committed Successfully**********")
+                Logger().getLogger().info("**********Query Executed and Changes Committed Successfully**********")
                 results = cursor.lastrowid
             else:
                 results = cursor.fetchall()
-                print("---Query Executed Successfully--- "+query)
+                Logger().getLogger().info("---Query Executed Successfully--- "+query)
             return results
         except Exception as e:
+            Logger().getLogger().error(e)
             raise Exception("mySQL:execute_query:"+str(e))
